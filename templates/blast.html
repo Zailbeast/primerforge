@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}BLAST/BLAT - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>BLAST/BLAT</h1>
+    <p class="sub">Search DNA and protein sequences against genomes, transcripts and proteins,
+      with the search options and result views of Ensembl's BLAST/BLAT tool. BLAST runs on
+      NCBI BLAST+; BLAT runs in WSL.</p>
+  </div>
+  <div class="spacer"></div>
+  <div class="row">
+    <span class="env-pill {{ 'on' if env.blast_ready else 'off' }}"><span class="dot"></span>BLAST+</span>
+    <span class="env-pill {{ 'on' if env.blat_species else 'off' }}"
+          title="{{ 'BLAT indexes installed in WSL' if env.blat_species else 'Install BLAT for a species in Settings' }}">
+      <span class="dot"></span>BLAT (WSL)</span>
+  </div>
+</div>
+
+{% if not species_list %}
+<div class="note" style="margin-bottom:16px">No species databases are installed yet.
+  <a href="{{ url_for('page_settings') }}#species" style="margin-left:4px">Install one in Settings</a>.</div>
+{% endif %}
+
+<form id="blast-form" class="card card-pad blast-form" autocomplete="off" novalidate>
+  <div class="bf-row">
+    <div class="bf-label">Sequence data</div>
+    <div class="bf-field">
+      <div id="seq-list" class="seq-list"></div>
+      <div id="seq-input-wrap">
+        <textarea id="seq-input" rows="7" spellcheck="false"
+          placeholder="Maximum of {{ form_options.limits.max_num_sequences }} sequences (type in plain text, FASTA or sequence ID)"></textarea>
+        <div class="row bf-actions">
+          <button type="button" class="btn btn-sm" id="seq-add">Add sequence(s)</button>
+          <label class="btn btn-sm" style="cursor:pointer">Or upload sequence file
+            <input type="file" id="seq-file" hidden accept=".fa,.fasta,.fas,.fna,.faa,.txt,.seq"></label>
+          <button type="button" class="btn btn-sm" id="seq-cancel" hidden>Cancel</button>
+          <span class="small muted">Sequence IDs and accessions from Ensembl, RefSeq, UniProt or ENA are fetched for you.</span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <span class="small muted">Try:</span>
+          <button type="button" class="btn btn-sm bf-example" title="TP53 mRNA 5' end (300 bp)"
+            data-seq=">TP53 mRNA 5' end&#10;GATGGGATTGGGGTTTTCCCCTCCCATGTGCTCAAGACTGGCGCTAAAAGTTTTGAGCTTCTCAAAAGTCTAGAGCCACCGTCCAGGGAGCAGGTAGCTGCTGGGCTCCGGGGACACTTTGCGTTCGGGCTGGGAGCGTGCTTTCCACGACGGTGACACGCTTCCCTGGATTGGCAGCCAGACTGCCTTCCGGGTCACTGCCATGGAGGAGCCGCAGTCAGATCCTAGCGTCGAGCCCCCTCTGAGTCAGGAAACATTTTCAGACCTATGGAAACTACTTCCTGAAAACAACGTTCTGTC">TP53 mRNA</button>
+          <button type="button" class="btn btn-sm bf-example" title="Human p53 protein (393 aa)"
+            data-seq=">P53_HUMAN&#10;MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPSQAMDDLMLSPDDIEQWFTEDPGPDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQKTYQGSYGFRLGFLHSGTAKSVTCTYSPALNKMFCQLAKTCPVQLWVDSTPPPGTRVRAMAIYKQSQHMTEVVRRCPHHERCSDSDGLAPPQHLIRVEGNLRVEYLDDRNTFRHSVVVPYEPPEVGSDCTTIHYNYMCNSSCMGGMNRRPILTIITLEDSSGNLLGRNSFEVRVCACPGRDRRTEEENLRKKGEPHHELPPGSTKRALPNNTSSSPQPKKKPLDGEYFTLQIRGRERFEMFRELNEALELKDAQAGKEPGGSRAHSSHLKSKKGQSTSRHKKLMFKTEGPDSD">p53 protein</button>
+          <button type="button" class="btn btn-sm bf-example" title="A 20-nt primer: BLAT needs more than 26 bases, so BLASTN is used"
+            data-seq=">primer&#10;GTGCTCAAGACTGGCGCTAA">20-nt primer</button>
+          <button type="button" class="btn btn-sm bf-example" title="Fetch ENST00000269305 (TP53-201 cDNA) from Ensembl"
+            data-seq="ENST00000269305">ENST00000269305</button>
+        </div>
+      </div>
+      <div id="seq-info" class="small dim" style="margin-top:6px"></div>
+      <div id="seq-msg"></div>
+      <div class="row" style="margin-top:12px;gap:16px">
+        <span class="bf-sub">Query type</span>
+        {% for value, caption in form_options.query_types.items() %}
+        <label class="check"><input type="radio" name="query_type" value="{{ value }}" {{ 'checked' if loop.first }}> {{ caption }}</label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="bf-row">
+    <div class="bf-label">Search against</div>
+    <div class="bf-field">
+      <div class="row" style="gap:8px;align-items:flex-start">
+        <div id="species-picked" class="species-picked"></div>
+        <button type="button" class="btn btn-sm" id="species-change">Change species</button>
+      </div>
+      <div class="db-choices">
+        {% for value, caption in form_options.db_types.items() %}
+        <div class="db-choice">
+          <label class="check"><input type="radio" name="db_type" value="{{ value }}" {{ 'checked' if loop.first }}> {{ caption }}</label>
+          <select id="source_{{ value }}" aria-label="{{ caption }} source"></select>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="bf-row">
+    <div class="bf-label"><label for="search_type">Search tool</label></div>
+    <div class="bf-field">
+      <select id="search_type" style="max-width:320px"></select>
+      <div class="hint" id="search-hint"></div>
+    </div>
+  </div>
+
+  <div class="bf-row" id="sens-row">
+    <div class="bf-label"><label for="config_set">Search sensitivity</label></div>
+    <div class="bf-field"><select id="config_set" style="max-width:320px"></select></div>
+  </div>
+
+  <div class="bf-row">
+    <div class="bf-label"><label for="description">Description <span class="muted" style="font-weight:400">(optional)</span></label></div>
+    <div class="bf-field"><input type="text" id="description" maxlength="300"
+      placeholder="Used as the job name; otherwise the sequence name is used"></div>
+  </div>
+
+  <details class="adv" id="adv">
+    <summary>Additional configurations</summary>
+    <div id="config-groups"></div>
+  </details>
+
+  <div class="row" style="margin-top:18px">
+    <button type="submit" class="btn btn-primary" id="run-btn">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5l14 8.5-14 8.5z"/></svg>
+      Run
+    </button>
+    <button type="button" class="btn" id="reset-btn">Clear form</button>
+    <span class="small dim" id="run-msg"></span>
+  </div>
+  <div id="form-error"></div>
+</form>
+
+<section class="card" style="margin-top:20px">
+  <div class="card-pad" style="padding-bottom:0">
+    <div class="toolbar" style="margin-bottom:10px">
+      <h2>Recent tickets</h2>
+      <span class="spacer"></span>
+      <span class="small muted" id="tickets-count"></span>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl tickets">
+      <thead><tr><th>Analysis</th><th>Jobs</th><th>Submitted at</th><th></th></tr></thead>
+      <tbody id="tickets-body"><tr><td colspan="4"><div class="empty">Loading…</div></td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<dialog id="species-dialog" class="dialog">
+  <div class="dialog-head"><h2>Select species</h2>
+    <span class="small muted">Up to {{ form_options.limits.species }}; one job runs per sequence per species.</span></div>
+  <input type="search" id="species-filter" placeholder="Filter species…" style="margin:12px 0">
+  <div id="species-options" class="species-options"></div>
+  <div class="row" style="margin-top:14px">
+    <a class="small" href="{{ url_for('page_settings') }}#species">Install more species</a>
+    <span class="spacer"></span>
+    <button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button>
+    <button type="button" class="btn btn-primary" id="species-done">Done</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script id="blast-data" type="application/json">{{ {'options': form_options, 'species': species_list, 'edit_ticket': edit_ticket, 'edit_job': edit_job}|tojson }}</script>
+<script src="{{ url_for('static', filename='blast.js') }}"></script>
+<script>BL.initForm(JSON.parse(document.getElementById('blast-data').textContent));</script>
+{% endblock %}

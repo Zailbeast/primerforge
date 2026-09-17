@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}Settings - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">PrimerForge works out of the box using Ensembl web services.
+      Installing the local genome makes it faster, lets it work offline, and turns
+      on genome-wide specificity checking. The BLAST/BLAT tool searches databases
+      installed per species below.</p>
+  </div>
+</div>
+
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+  <section class="card card-pad">
+    <h2>Reference data</h2>
+    <table class="tbl" style="margin-top:12px">
+      <tbody>
+        <tr><td>Assembly</td><td class="num">{{ env.assembly }}</td></tr>
+        <tr><td>Sequence source</td>
+            <td class="num">{{ 'Local genome' if env.seq_source == 'local' else 'Ensembl REST' }}</td></tr>
+        <tr><td>Genome FASTA</td><td class="num">
+          {% if env.genome_ready %}<span class="badge badge-good"><i class="bdot"></i>installed</span>
+          {% else %}<span class="badge badge-muted"><i class="bdot"></i>not installed</span>{% endif %}
+        </td></tr>
+        <tr><td>BLAST database</td><td class="num">
+          {% if env.blast_ready %}<span class="badge badge-good"><i class="bdot"></i>ready</span>
+          {% else %}<span class="badge badge-muted"><i class="bdot"></i>not built</span>{% endif %}
+        </td></tr>
+      </tbody>
+    </table>
+
+    <div style="margin-top:16px">
+      <div class="bar"><i id="setup-bar"></i></div>
+      <div class="progress-msg" style="margin-top:9px">
+        <span id="setup-text" class="small dim">Checking…</span>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn btn-primary" id="setup-start">Install local genome</button>
+      <span class="small muted">~7 GB download and index. Resumable.</span>
+    </div>
+    <p class="hint">Downloads the soft-masked GRCh38 primary assembly from Ensembl and
+      NCBI BLAST+, then builds a nucleotide database. You can keep using the tool
+      while this runs.</p>
+  </section>
+
+  <section class="card card-pad">
+    <h2>What local data unlocks</h2>
+    <ul class="small dim" style="margin:12px 0 0;padding-left:19px;line-height:1.8">
+      <li><b>In-silico PCR.</b> Every primer is BLASTed genome-wide; hits whose 3'
+        ends anneal are paired into predicted products, so you see extra bands
+        before you order.</li>
+      <li><b>BLAST/BLAT searches.</b> BLASTN, BLASTX, BLASTP, TBLASTN, TBLASTX and BLAT
+        against genomes, cDNAs, ncRNAs and proteins.</li>
+      <li><b>Offline use.</b> Reference sequence comes from disk rather than the
+        network.</li>
+    </ul>
+    <hr class="rule">
+    <h3>Paths</h3>
+    <div class="small mono muted" style="margin-top:8px;word-break:break-all;line-height:1.8">
+      <div>{{ paths.data }}</div>
+      <div>{{ paths.genome }}</div>
+      <div>{{ paths.blastdb }}</div>
+    </div>
+  </section>
+</div>
+
+<section class="card card-pad" id="species" style="margin-top:14px">
+  <div class="row">
+    <div>
+      <h2>BLAST/BLAT species databases</h2>
+      <p class="small dim" style="margin:4px 0 0;max-width:80ch">Each species can have a genome (searched as-is, hard-masked
+        or soft-masked), cDNA, ncRNA and protein databases, gene annotation for overlapping genes and
+        exon markup, a repeat filter for queries, and a BLAT index. Everything comes from Ensembl's
+        current release and installs in the background.</p>
+    </div>
+  </div>
+  <div class="tbl-wrap" style="margin-top:12px">
+    <table class="tbl species-tbl">
+      <thead><tr><th>Species</th><th>Components</th><th>Status</th><th></th></tr></thead>
+      <tbody id="species-body"><tr><td colspan="4"><div class="empty">Loading…</div></td></tr></tbody>
+    </table>
+  </div>
+  <hr class="rule">
+  <h3>Add a species</h3>
+  <div class="row" style="margin-top:10px;align-items:flex-start">
+    <div style="flex:1;min-width:260px">
+      <input type="search" id="add-species-q" placeholder="Search Ensembl species, e.g. mouse, zebrafish, Gallus…" list="ensembl-species">
+      <datalist id="ensembl-species"></datalist>
+      <div class="small muted" id="add-species-info" style="margin-top:6px"></div>
+    </div>
+    <div class="add-components" id="add-components"></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn btn-primary" id="add-species-btn" disabled>Install</button>
+    <span class="small muted">Genomes are large: human needs about 10 GB for all components.</span>
+  </div>
+</section>
+
+<section class="card card-pad" style="margin-top:14px">
+  <h2>BLAT server{{ '' if native else ' (WSL)' }}</h2>
+  <p class="small dim" style="margin:4px 0 0;max-width:80ch">UCSC BLAT runs {{ 'directly on this Linux server' if native else 'inside the Windows Subsystem for Linux' }}, as a
+    gfServer per species holding its genome index, queried with gfClient, which is how Ensembl runs BLAT.
+    Servers start on demand and stop when the app exits.</p>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:12px">
+    <div>
+      <table class="tbl"><tbody id="wsl-body"><tr><td>Checking {{ 'BLAT' if native else 'WSL' }}…</td></tr></tbody></table>
+      <div class="row" style="margin-top:12px">
+        {% if not native %}
+        <label class="small dim" for="wsl-distro">Distribution</label>
+        <select id="wsl-distro" style="width:auto;min-width:160px"></select>
+        {% endif %}
+        <label class="check small"><input type="checkbox" id="blat-autostart"> Start BLAT servers with the app</label>
+      </div>
+    </div>
+    <div>
+      <table class="tbl">
+        <thead><tr><th>Species</th><th class="num">Port</th><th>State</th><th></th></tr></thead>
+        <tbody id="blat-body"><tr><td colspan="4" class="small muted">No BLAT indexes yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const E = PF.esc;
+  const bar = document.getElementById('setup-bar');
+  const text = document.getElementById('setup-text');
+  const btn = document.getElementById('setup-start');
+
+  async function tick() {
+    let s;
+    try { s = await PF.get('/api/setup/status'); }
+    catch { return setTimeout(tick, 3000); }
+
+    bar.style.width = (s.pct || (s.done ? 100 : 0)) + '%';
+    text.textContent = s.error ? s.error : `${s.stage}: ${s.message}`;
+    text.style.color = s.error ? 'var(--crit-ink)' : '';
+    btn.disabled = !!s.running;
+    btn.textContent = s.running ? 'Installing…'
+      : (s.blast_ready ? 'Re-run setup' : 'Install local genome');
+
+    if (s.running) setTimeout(tick, 2000);
+    else setTimeout(tick, 8000);
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    await PF.post('/api/setup/start', {});
+    PF.toast('Setup started');
+    tick();
+  });
+
+  tick();
+
+  /* ---------------- species databases ---------------- */
+  const COMPONENTS = {{ components|tojson }};
+  const ORDER = {{ install_order|tojson }};
+  const body = document.getElementById('species-body');
+
+  function compBadges(s) {
+    const inst = (s.install && s.install.components) || {};
+    return ORDER.map(c => {
+      const have = s.components[c];
+      const st = (inst[c] || {}).state;
+      const running = s.installing && st === 'running';
+      const cls = have ? 'badge-good' : st === 'error' ? 'badge-crit' : running ? 'badge-warn' : 'badge-muted';
+      const title = `${COMPONENTS[c]}${inst[c] && inst[c].message ? ' — ' + inst[c].message : ''}`;
+      return `<span class="badge ${cls}" title="${E(title)}">${running ? '<span class="spin" style="width:9px;height:9px;border-width:1.5px"></span>' : '<i class="bdot"></i>'}${E(c)}</span>`;
+    }).join(' ');
+  }
+
+  async function loadSpecies() {
+    let list;
+    try { list = await PF.get('/api/species'); } catch { return setTimeout(loadSpecies, 5000); }
+    body.innerHTML = list.length ? list.map(s => {
+      const missing = ORDER.filter(c => !s.components[c]);
+      const inst = s.install || {};
+      const status = s.installing
+        ? `<div class="small"><span class="spin" style="display:inline-block;vertical-align:-2px"></span> ${E(inst.component || '')}: ${E(inst.message || 'working')}</div>
+           <div class="bar" style="margin-top:6px"><i style="width:${inst.pct || 0}%"></i></div>`
+        : inst.error ? `<div class="small" style="color:var(--crit-ink)">${E(inst.error)}</div>`
+        : missing.length ? `<div class="small muted">${missing.length} component${missing.length > 1 ? 's' : ''} not installed</div>`
+        : '<div class="small" style="color:var(--good-ink)">All components installed</div>';
+      return `<tr>
+        <td style="white-space:nowrap"><b>${E(s.display_name)}</b><div class="small muted"><i>${E(s.scientific_name)}</i> · ${E(s.assembly)}${s.release ? ' · Ensembl ' + s.release : ''}</div></td>
+        <td class="comp-badges">${compBadges(s)}</td>
+        <td style="min-width:220px">${status}</td>
+        <td style="white-space:nowrap">${!s.installing && missing.length
+          ? `<button class="btn btn-sm" data-install="${E(s.name)}" data-comps="${missing.join(',')}">Install missing</button>` : ''}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="4"><div class="empty">No species installed.</div></td></tr>';
+    setTimeout(loadSpecies, list.some(s => s.installing) ? 2500 : 15000);
+  }
+  body.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-install]');
+    if (!b) return;
+    b.disabled = true;
+    await PF.post('/api/species/install', { species: b.dataset.install, components: b.dataset.comps.split(',') });
+    PF.toast('Installation started');
+    loadSpecies();
+  });
+  loadSpecies();
+
+  /* add a species */
+  const q = document.getElementById('add-species-q');
+  const info = document.getElementById('add-species-info');
+  const addBtn = document.getElementById('add-species-btn');
+  const compsBox = document.getElementById('add-components');
+  let ensembl = [], chosen = null;
+  compsBox.innerHTML = ORDER.map(c => `<label class="check small"><input type="checkbox" value="${c}" checked> ${E(COMPONENTS[c])}</label>`).join('');
+  q.addEventListener('focus', async () => {
+    if (ensembl.length) return;
+    info.textContent = 'Loading the Ensembl species list…';
+    try {
+      ensembl = await PF.get('/api/species/ensembl');
+      document.getElementById('ensembl-species').innerHTML = ensembl.map(s =>
+        `<option value="${E(s.display_name)} (${E(s.name)})">${E(s.assembly || '')}</option>`).join('');
+      info.textContent = `${ensembl.length} species available from Ensembl.`;
+    } catch (err) { info.textContent = err.message; }
+  });
+  q.addEventListener('input', () => {
+    const m = q.value.match(/\(([a-z0-9_]+)\)\s*$/);
+    chosen = m ? ensembl.find(s => s.name === m[1]) : ensembl.find(s => s.name === q.value.trim().toLowerCase());
+    addBtn.disabled = !chosen;
+    if (chosen) info.textContent = `${chosen.display_name} · ${chosen.assembly} · taxon ${chosen.taxon_id}`;
+  });
+  addBtn.addEventListener('click', async () => {
+    if (!chosen) return;
+    const comps = [...compsBox.querySelectorAll('input:checked')].map(i => i.value);
+    addBtn.disabled = true;
+    try {
+      await PF.post('/api/species/install', { species: chosen.name, components: comps });
+      PF.toast(`Installing ${chosen.display_name}`);
+      q.value = ''; chosen = null;
+      setTimeout(loadSpecies, 800);
+    } catch (err) { info.textContent = err.message; addBtn.disabled = false; }
+  });
+
+  /* ---------------- BLAT / WSL ---------------- */
+  const distroSel = document.getElementById('wsl-distro');
+  const autostart = document.getElementById('blat-autostart');
+  async function loadBlat() {
+    let s;
+    try { s = await PF.get('/api/blat/status'); } catch { return setTimeout(loadBlat, 8000); }
+    const w = s.wsl;
+    document.getElementById('wsl-body').innerHTML = w.native ? `
+      <tr><td>Runs on</td><td class="num">${E(w.distro)}</td></tr>
+      <tr><td>BLAT directory</td><td class="num mono small">${E(w.blat_dir)}</td></tr>
+      <tr><td>gfServer step size</td><td class="num">${E(w.settings.blat_step_size)}</td></tr>` : `
+      <tr><td>WSL</td><td class="num">${w.available ? '<span class="badge badge-good"><i class="bdot"></i>installed</span>' : '<span class="badge badge-crit"><i class="bdot"></i>not found</span>'}</td></tr>
+      <tr><td>Linux distribution</td><td class="num">${w.distro ? E(w.distro) : '<span class="muted">none — run <code>wsl --install -d Ubuntu</code></span>'}</td></tr>
+      <tr><td>BLAT directory</td><td class="num mono small">${E(w.blat_dir)}</td></tr>
+      <tr><td>gfServer step size</td><td class="num">${E(w.settings.blat_step_size)}</td></tr>`;
+    const names = w.distros.filter(d => !/^docker-desktop|^rancher-desktop/.test(d.name));
+    if (distroSel) distroSel.innerHTML = `<option value="">WSL default</option>` + names.map(d =>
+      `<option value="${E(d.name)}" ${w.settings.wsl_distro === d.name ? 'selected' : ''}>${E(d.name)} (WSL ${E(d.version)})</option>`).join('');
+    autostart.checked = !!w.settings.blat_autostart;
+    const rows = s.servers.map(v => {
+      const cls = { running: 'badge-good', starting: 'badge-warn', error: 'badge-crit' }[v.state] || 'badge-muted';
+      return `<tr><td>${E(v.display_name || v.species)}</td><td class="num">${E(v.port)}</td>
+        <td><span class="badge ${cls}" title="${E(v.message || '')}"><i class="bdot"></i>${E(v.state)}</span>
+          ${v.message && v.state !== 'running' ? `<div class="small muted">${E(v.message)}</div>` : ''}</td>
+        <td style="white-space:nowrap">${v.state === 'running'
+          ? `<button class="btn btn-sm" data-blat="${E(v.species)}" data-act="stop">Stop</button>`
+          : `<button class="btn btn-sm" data-blat="${E(v.species)}" data-act="start" ${v.state === 'starting' ? 'disabled' : ''}>Start</button>`}</td></tr>`;
+    });
+    document.getElementById('blat-body').innerHTML = rows.join('') ||
+      '<tr><td colspan="4" class="small muted">No BLAT indexes yet — install the "blat" component for a species.</td></tr>';
+    setTimeout(loadBlat, s.servers.some(v => v.state === 'starting') ? 2500 : 20000);
+  }
+  document.getElementById('blat-body').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-blat]');
+    if (!b) return;
+    b.disabled = true;
+    await PF.post(`/api/blat/${b.dataset.blat}/${b.dataset.act}`, {});
+    PF.toast(b.dataset.act === 'start' ? 'Starting BLAT server…' : 'Stopping BLAT server…');
+    setTimeout(loadBlat, 1500);
+  });
+  if (distroSel) distroSel.addEventListener('change', async () => {
+    await PF.post('/api/settings', { wsl_distro: distroSel.value });
+    PF.toast('WSL distribution saved'); loadBlat();
+  });
+  autostart.addEventListener('change', async () => {
+    await PF.post('/api/settings', { blat_autostart: autostart.checked });
+    PF.toast('Saved');
+  });
+  loadBlat();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,26 @@
+[Unit]
+Description=PrimerForge data setup (genomes, BLAST and BLAT databases)
+Documentation=file://@APP_DIR@/app/README.md
+Wants=network-online.target
+After=network-online.target primerforge.service
+
+[Service]
+# Runs to completion (hours for human) and is started by the installer or
+# 'sudo primerforge setup-data'. Every step is resumable, so it can simply be
+# started again after an interruption.
+Type=oneshot
+User=@USER@
+Group=@USER@
+EnvironmentFile=@CONF_DIR@/primerforge.env
+WorkingDirectory=@APP_DIR@/app
+ExecStart=@APP_DIR@/venv/bin/python -m primerforge.cli setup-data --species ${PRIMERFORGE_SPECIES}
+# Restart the web service so it picks up the new genome and databases.
+ExecStartPost=+@SYSTEMCTL@ try-restart primerforge.service
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=@PROTECT_HOME@
+ReadWritePaths=@DATA_DIR@

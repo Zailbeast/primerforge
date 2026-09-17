@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Users - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Users</h1>
+    <p class="sub">Everyone signed in can design primers, run BLAST/BLAT and see the group's
+      runs and tickets, but can delete only their own. Administrators also manage Settings,
+      species databases and these accounts.</p>
+  </div>
+</div>
+
+<section class="card card-pad">
+  <h2>Add a user</h2>
+  <form id="add-user" class="row" style="margin-top:12px;align-items:flex-end" autocomplete="off">
+    <div style="flex:1;min-width:170px">
+      <label class="field" for="nu-username">Username</label>
+      <input type="text" id="nu-username" required autocapitalize="none" spellcheck="false"
+             placeholder="e.g. asmith">
+    </div>
+    <div style="flex:1.4;min-width:200px">
+      <label class="field" for="nu-name">Full name <span class="muted">(optional)</span></label>
+      <input type="text" id="nu-name" placeholder="e.g. Alice Smith">
+    </div>
+    <div style="min-width:130px">
+      <label class="field" for="nu-role">Role</label>
+      <select id="nu-role"><option value="user">User</option><option value="admin">Administrator</option></select>
+    </div>
+    <button class="btn btn-primary" type="submit">Add user</button>
+  </form>
+  <div id="new-secret" hidden style="margin-top:14px">
+    <div class="small dim" id="new-secret-label"></div>
+    <div class="row" style="margin-top:6px">
+      <div class="secret-box" id="new-secret-value"></div>
+      <button class="btn btn-sm" type="button" id="new-secret-copy">Copy</button>
+    </div>
+    <div class="hint">Shown only once. Give it to them privately; they choose their own password when they first sign in.</div>
+  </div>
+</section>
+
+<section class="card card-pad" style="margin-top:14px">
+  <h2>Accounts</h2>
+  <div class="tbl-wrap" style="margin-top:10px">
+    <table class="tbl">
+      <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+      <tbody>
+      {% for u in users %}
+        <tr data-id="{{ u.id }}" data-name="{{ u.username }}">
+          <td><b>{{ u.username }}</b>{% if u.full_name %}<div class="small muted">{{ u.full_name }}</div>{% endif %}</td>
+          <td>
+            {% if u.id == current_user.id %}{{ 'Administrator' if u.is_admin else 'User' }} <span class="small muted">(you)</span>
+            {% else %}
+            <select class="u-role" style="width:auto">
+              <option value="user" {{ 'selected' if not u.is_admin }}>User</option>
+              <option value="admin" {{ 'selected' if u.is_admin }}>Administrator</option>
+            </select>
+            {% endif %}
+          </td>
+          <td>
+            {% if not u.active %}<span class="badge badge-muted"><i class="bdot"></i>disabled</span>
+            {% elif u.must_change %}<span class="badge badge-warn"><i class="bdot"></i>awaiting first sign-in</span>
+            {% else %}<span class="badge badge-good"><i class="bdot"></i>active</span>{% endif %}
+          </td>
+          <td class="small">{{ u.last_login|ts if u.last_login else 'never' }}</td>
+          <td class="num" style="white-space:nowrap">
+            {% if u.id == current_user.id %}
+            <a class="btn btn-sm" href="{{ url_for('page_account') }}">Change your password</a>
+            {% else %}
+            <button class="btn btn-sm u-act" data-action="reset-password" type="button">Reset password</button>
+            <button class="btn btn-sm u-act" data-action="{{ 'disable' if u.active else 'enable' }}" type="button">{{ 'Disable' if u.active else 'Enable' }}</button>
+            <button class="btn btn-sm btn-danger u-act" data-action="delete" type="button">Delete</button>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">On the server you can also run <code>sudo primerforge users --help</code>, for example to recover the administrator account.</p>
+</section>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const secret = (label, value) => {
+    $('#new-secret-label').textContent = label;
+    $('#new-secret-value').textContent = value;
+    $('#new-secret').hidden = false;
+    $('#new-secret').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+  $('#new-secret-copy').addEventListener('click', () => PF.copy($('#new-secret-value').textContent, 'Password copied'));
+  // Reload to show the updated table, carrying the one-time password across the reload.
+  // Without browser storage, show it here instead so it is never lost.
+  const reloadWithSecret = (label, value) => {
+    try { sessionStorage.setItem('pf-new-secret', JSON.stringify([label, value])); }
+    catch { secret(label, value); return; }
+    location.reload();
+  };
+
+  $('#add-user').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const r = await PF.post('/api/users', { username: $('#nu-username').value,
+        full_name: $('#nu-name').value, role: $('#nu-role').value });
+      reloadWithSecret(`Temporary password for ${r.user.username}:`, r.password);
+    } catch (err) { alert(err.message); }
+  });
+
+  document.querySelectorAll('tr[data-id]').forEach(row => {
+    const id = row.dataset.id, name = row.dataset.name;
+    const role = row.querySelector('.u-role');
+    if (role) role.addEventListener('change', async () => {
+      try { await PF.post(`/api/users/${id}/role`, { role: role.value }); PF.toast(`${name} is now ${role.value === 'admin' ? 'an administrator' : 'a user'}`); }
+      catch (err) { alert(err.message); location.reload(); }
+    });
+    row.querySelectorAll('.u-act').forEach(btn => btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;
+      if (action === 'delete' && !confirm(`Delete ${name}? Their runs and tickets stay.`)) return;
+      if (action === 'reset-password' && !confirm(`Reset ${name}'s password? They will need the new temporary password to sign in.`)) return;
+      try {
+        const r = await PF.post(`/api/users/${id}/${action}`, {});
+        if (r.password) reloadWithSecret(`New temporary password for ${name}:`, r.password);
+        else location.reload();
+      } catch (err) { alert(err.message); }
+    }));
+  });
+
+  try {
+    const pending = sessionStorage.getItem('pf-new-secret');
+    if (pending) { sessionStorage.removeItem('pf-new-secret'); secret(...JSON.parse(pending)); }
+  } catch { /* storage unavailable: the reload simply loses the message */ }
+})();
+</script>
+{% endblock %}

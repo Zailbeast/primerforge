@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}{{ view_names[view] }} · hit {{ hit.idx + 1 }} - BLAST/BLAT{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div style="min-width:0">
+    <div class="row small muted" style="gap:7px;margin-bottom:5px">
+      <a href="{{ url_for('page_blast') }}">BLAST/BLAT</a><span>/</span>
+      <a class="mono" href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=job.id) }}">{{ ticket.id }}</a><span>/</span>
+      <span>Hit {{ hit.idx + 1 }} of {{ '{:,}'.format(n_hits) }}</span>
+    </div>
+    <h1>{{ view_names[view] }}</h1>
+    <div class="meta"><span>{{ job.description or job.summary }}</span></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="row">
+    {% if hit.idx > 0 %}<a class="btn btn-sm" href="{{ url_for('page_blast_hit', jid=job.id, idx=hit.idx - 1, view=view) }}">← Previous hit</a>{% endif %}
+    {% if hit.idx + 1 < n_hits %}<a class="btn btn-sm" href="{{ url_for('page_blast_hit', jid=job.id, idx=hit.idx + 1, view=view) }}">Next hit →</a>{% endif %}
+    <a class="btn btn-sm" href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=job.id) }}">All results</a>
+  </div>
+</div>
+
+<div class="grid hit-grid">
+  <section class="card card-pad">
+    <h2>Hit summary</h2>
+    <table class="twocol" style="margin-top:10px">
+      {% for k, v in summary %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+      {% if hit.genes %}<tr><th>Overlapping Gene(s)</th><td>{% for g in hit.genes %}<a href="{{ ensembl_url }}/Gene/Summary?g={{ g.id }}" target="_blank" rel="noopener" title="{{ g.biotype }}">{{ g.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</td></tr>{% endif %}
+      {% if hit.gene_hit %}<tr><th>Gene hit</th><td><a href="{{ ensembl_url }}/Gene/Summary?g={{ hit.gene_hit.id }}" target="_blank" rel="noopener">{{ hit.gene_hit.name }}</a>
+        {% if hit.tdescription %}<span class="small muted">{{ hit.tdescription }}</span>{% endif %}</td></tr>{% endif %}
+    </table>
+    {% if hit.gid %}
+    {% set span = hit.gend - hit.gstart %}
+    <div class="row" style="margin-top:12px">
+      <a class="btn btn-sm" target="_blank" rel="noopener"
+         href="{{ ensembl_url }}/Location/View?r={{ hit.gid }}:{{ [1, (hit.gstart - span * 0.05)|int]|max }}-{{ (hit.gend + span * 0.05)|int }}">Region in Ensembl ↗</a>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="card card-pad">
+    <h2>Configure this page</h2>
+    <form id="view-config" class="cfg-grid" style="margin-top:10px">
+      {% for f in option_fields %}
+      <div><label for="opt_{{ f.name }}">{{ f.label }}</label>
+        <select id="opt_{{ f.name }}" name="{{ f.name }}">
+          {% for v in f['values'] %}<option value="{{ v.value }}" {{ 'selected' if v.value == f.value }}>{{ v.caption }}</option>{% endfor %}
+        </select></div>
+      {% endfor %}
+    </form>
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="btn btn-sm" id="view-reset">Reset options</button>
+      <span class="small muted">Changes apply immediately and are remembered.</span>
+    </div>
+  </section>
+</div>
+
+<div class="tabs" role="tablist" style="margin-top:18px">
+  {% for key, label in view_names.items() %}
+  {% if key != 'genomic' or hit.gid %}
+  <a role="tab" class="tab {{ 'active' if key == view }}" aria-selected="{{ 'true' if key == view else 'false' }}"
+     href="{{ url_for('page_blast_hit', jid=job.id, idx=hit.idx, view=key) }}">{{ label }}</a>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<section class="card card-pad seq-card-view">
+  {% if error %}
+  <div class="note bad">{{ error }}</div>
+  {% else %}
+  <div class="row" style="margin-bottom:10px">
+    <h3>{{ result.title }}</h3>
+    <span class="spacer"></span>
+    {% if view == 'genomic' %}
+    <a class="btn btn-sm" href="{{ url_for('blast_genomic_fasta', jid=job.id, idx=hit.idx, **opts) }}">Download FASTA</a>
+    <button class="btn btn-sm" id="copy-seq" type="button">Copy sequence</button>
+    <button class="btn btn-sm" id="blast-this" type="button"
+      data-name="{{ result.region.chrom }}:{{ result.region.start }}-{{ result.region.end }}:{{ result.region.strand }}">BLAST this sequence</button>
+    {% endif %}
+  </div>
+  {% for n in result.notes %}<div class="note info" style="margin-bottom:8px">{{ n }}</div>{% endfor %}
+  {% if result.pending %}
+  <div class="note info" id="pending-note" style="margin-bottom:8px">
+    <span class="spin"></span>
+    <span>Fetching {{ result.pending|map(attribute='kind')|unique|join(' and ') }} from Ensembl — the view updates when they arrive.</span>
+  </div>
+  {% endif %}
+  {% if result.legend %}
+  <div class="legend sv-legend">
+    {% for cls, label in result.legend %}<span class="li"><span class="sv-key {{ cls }}">A</span>{{ label }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="seqview-wrap"><pre class="seqview">{{ result.html|safe }}</pre></div>
+  {% endif %}
+</section>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script id="hit-data" type="application/json">{{ {
+  'view': view, 'species': job.species,
+  'pending': (result.pending if result and result.pending else []),
+  'sequence': (result.sequence if result and result.sequence else '')}|tojson }}</script>
+<script src="{{ url_for('static', filename='blast.js') }}"></script>
+<script>BL.initHit(JSON.parse(document.getElementById('hit-data').textContent));</script>
+{% endblock %}

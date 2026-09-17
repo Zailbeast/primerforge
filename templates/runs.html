@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}All runs - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Runs</h1>
+    <p class="sub">Every design is kept. Search the history, compare primer quality
+      across runs, and reopen any result.</p>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn btn-primary" href="{{ url_for('page_design') }}">New design</a>
+</div>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="charts" style="margin-top:14px">
+  <div class="chart-card">
+    <h3>Design activity</h3>
+    <div class="chart-sub">Runs per day</div>
+    <div id="c-activity"></div>
+  </div>
+  <div class="chart-card">
+    <h3>Specificity outcome</h3>
+    <div class="chart-sub">In-silico PCR result for every primer pair</div>
+    <div id="c-spec"></div>
+  </div>
+  <div class="chart-card">
+    <h3>Melting temperature</h3>
+    <div class="chart-sub">Distribution across all designed primers</div>
+    <div id="c-tm"></div>
+  </div>
+  <div class="chart-card">
+    <h3>Product size</h3>
+    <div class="chart-sub">Distribution across all primer pairs</div>
+    <div id="c-size"></div>
+  </div>
+  <div class="chart-card">
+    <h3>Most-designed genes</h3>
+    <div class="chart-sub">Variants per gene</div>
+    <div id="c-genes"></div>
+  </div>
+  <div class="chart-card">
+    <h3>Assay mix</h3>
+    <div class="chart-sub">Runs per assay type</div>
+    <div id="c-assay"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:20px">
+  <div class="card-pad" style="padding-bottom:0">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search gene, variant, label or run id…">
+      <select id="assay-filter">
+        <option value="">All assays</option>
+        <option value="sanger">Sanger confirmation</option>
+        <option value="longrange">Long-range / gap-filling</option>
+      </select>
+      <span class="spacer"></span>
+      <span class="small muted" id="result-count"></span>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr>
+        <th data-sort="created_at">When</th>
+        <th data-sort="label">Run</th>
+        <th data-sort="genes">Genes</th>
+        <th data-sort="assay">Assay</th>
+        <th class="num" data-sort="n_input">Variants</th>
+        <th data-sort="status">Status</th>
+        <th class="num">Duration</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="runs-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const E = PF.esc, C = PF.commas;
+  let stats = null, rows = [];
+  let sortKey = 'created_at', sortDir = -1;
+
+  const tsFmt = (t) => new Date(t * 1000).toLocaleString(undefined,
+    { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  const STATUS_BADGE = {
+    ok: ['badge-good', 'ok'], partial: ['badge-warn', 'partial'],
+    failed: ['badge-crit', 'failed'], running: ['badge-muted', 'running']
+  };
+
+  function renderTiles() {
+    const t = stats.totals;
+    const rate = t.variants ? (100 * t.ok / t.variants) : 0;
+    const tiles = [
+      ['Runs', C(t.runs), 'design sessions saved'],
+      ['Variants', C(t.variants), `${C(t.ok)} resolved, ${C(t.failed)} failed`],
+      ['Primer pairs', C(stats.pairs_total), 'oligo pairs designed'],
+      ['Success rate', rate.toFixed(0) + '%', 'variants that yielded primers']
+    ];
+    document.getElementById('tiles').innerHTML = tiles.map(([k, v, s]) =>
+      `<div class="tile"><div class="k">${E(k)}</div><div class="v">${E(v)}</div>
+       <div class="s">${E(s)}</div></div>`).join('');
+  }
+
+  function renderCharts() {
+    PF.charts.timeBars(document.getElementById('c-activity'),
+      stats.by_day.slice().reverse(), { label: 'runs' });
+    PF.charts.statusBars(document.getElementById('c-spec'), stats.spec);
+    const tms = [];
+    stats.pairs.forEach(p => { tms.push(p.left_tm); tms.push(p.right_tm); });
+    PF.charts.histogram(document.getElementById('c-tm'), tms, { unit: ' °C', digits: 1 });
+    PF.charts.histogram(document.getElementById('c-size'),
+      stats.pairs.map(p => p.product_size), { unit: ' bp', digits: 0 });
+    PF.charts.hbars(document.getElementById('c-genes'),
+      stats.by_gene.map(g => ({ label: g.gene, n: g.n })), { unit: 'variants' });
+    const names = { sanger: 'Sanger', longrange: 'Long-range' };
+    PF.charts.hbars(document.getElementById('c-assay'),
+      stats.by_assay.map(a => ({ label: names[a.assay] || a.assay, n: a.n })),
+      { unit: 'runs' });
+  }
+
+  function renderTable() {
+    const body = document.getElementById('runs-body');
+    const sorted = rows.slice().sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      if (x === y) return 0;
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      return (x > y ? 1 : -1) * sortDir;
+    });
+    document.getElementById('result-count').textContent =
+      `${sorted.length} run${sorted.length === 1 ? '' : 's'}`;
+    if (!sorted.length) {
+      body.innerHTML = `<tr><td colspan="8"><div class="empty">
+        No runs match. <a href="/">Design something</a>.</div></td></tr>`;
+      return;
+    }
+    body.innerHTML = sorted.map(r => {
+      const [cls, txt] = STATUS_BADGE[r.status] || ['badge-muted', r.status];
+      const dur = (r.finished_at && r.created_at)
+        ? ((r.finished_at - r.created_at) < 60
+            ? (r.finished_at - r.created_at).toFixed(1) + 's'
+            : ((r.finished_at - r.created_at) / 60).toFixed(1) + ' min')
+        : '–';
+      const names = { sanger: 'Sanger', longrange: 'Long-range' };
+      return `<tr style="cursor:pointer" data-href="/run/${r.id}">
+        <td class="small muted" style="white-space:nowrap">${tsFmt(r.created_at)}</td>
+        <td><span style="font-weight:540">${E(r.label || r.id)}</span></td>
+        <td class="small dim">${E((r.genes || '').split(',').slice(0, 4).join(', ') || '–')}</td>
+        <td class="small dim">${E(names[r.assay] || r.assay)}</td>
+        <td class="num">${r.n_input}</td>
+        <td><span class="badge ${cls}"><i class="bdot"></i>${E(txt)}</span></td>
+        <td class="num small muted">${dur}</td>
+        <td><button class="btn btn-sm btn-danger del" data-id="${r.id}">Delete</button></td>
+      </tr>`;
+    }).join('');
+
+    body.querySelectorAll('tr[data-href]').forEach(tr => {
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('.del')) return;
+        window.location = tr.dataset.href;
+      });
+    });
+    body.querySelectorAll('.del').forEach(b => {
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this run permanently?')) return;
+        await PF.post('/api/run/' + b.dataset.id + '/delete', {});
+        PF.toast('Run deleted');
+        await load();
+      });
+    });
+  }
+
+  async function load() {
+    const q = document.getElementById('q').value;
+    const assay = document.getElementById('assay-filter').value;
+    [stats, rows] = await Promise.all([
+      PF.get('/api/stats'),
+      PF.get('/api/runs?q=' + encodeURIComponent(q) + '&assay=' + encodeURIComponent(assay))
+    ]);
+    renderTiles(); renderCharts(); renderTable();
+  }
+
+  document.getElementById('q').addEventListener('input', PF.debounce(load, 250));
+  document.getElementById('assay-filter').addEventListener('change', load);
+  document.querySelectorAll('th[data-sort]').forEach(th => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const k = th.dataset.sort;
+      sortDir = (k === sortKey) ? -sortDir : -1;
+      sortKey = k;
+      renderTable();
+    });
+  });
+  document.addEventListener('pf:theme', () => { if (stats) renderCharts(); });
+
+  load();
+})();
+</script>
+{% endblock %}

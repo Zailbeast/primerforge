@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Your account - PrimerForge{% endblock %}
+
+{% block content %}
+<section class="card card-pad auth-card">
+  <h1>{{ 'Choose a new password' if current_user.must_change else 'Your account' }}</h1>
+  <p class="small dim" style="margin:0">
+    Signed in as <b>{{ current_user.username }}</b>{% if current_user.full_name %} ({{ current_user.full_name }}){% endif %},
+    {{ 'administrator' if current_user.role == 'admin' else 'user' }}.
+    {% if current_user.must_change %}Your password was set by an administrator, so choose your own before continuing.{% endif %}
+  </p>
+  {% if message %}<div class="note info" style="margin-top:14px" role="status">{{ message }}</div>{% endif %}
+  {% if error %}<div class="note bad" style="margin-top:14px" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="{{ url_for('page_account') }}">
+    <div>
+      <label class="field" for="password">Current password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+    </div>
+    <div>
+      <label class="field" for="new_password">New password</label>
+      <input type="password" id="new_password" name="new_password" autocomplete="new-password"
+             minlength="{{ min_password }}" required>
+      <div class="hint">At least {{ min_password }} characters.</div>
+    </div>
+    <div>
+      <label class="field" for="confirm_password">New password again</label>
+      <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password"
+             minlength="{{ min_password }}" required>
+    </div>
+    <button class="btn btn-primary" type="submit">Change password</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}{{ transcript.gene_name if transcript else requested }} {{ requested }} - Transcript{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div style="min-width:0">
+    <div class="row small muted" style="gap:7px;margin-bottom:5px">
+      <a href="{{ url_for('page_transcripts') }}">Transcripts</a><span>/</span>
+      {% if transcript %}<a href="{{ url_for('page_transcripts', q=transcript.gene_name, species=species_name) }}">{{ transcript.gene_name }}</a><span>/</span>{% endif %}
+      <span class="mono">{{ requested }}</span>
+    </div>
+    <h1>{{ transcript.gene_name if transcript else requested }}
+      <span class="mono" style="font-size:16px;font-weight:500;color:var(--ink-2)">{{ ids.mane_refseq or ids.refseq_mrna or requested }}</span>
+      {% if ids.mane %}<span class="badge badge-good" style="vertical-align:3px"><i class="bdot"></i>{{ ids.mane }}</span>{% endif %}
+    </h1>
+    {% if gene and gene.description %}<p class="sub">{{ gene.description }}</p>{% endif %}
+  </div>
+  <div class="spacer"></div>
+  <div class="row">
+    {% if view %}
+    <button class="btn btn-sm" id="blast-cdna" type="button">BLAST/BLAT cDNA</button>
+    <details class="menu">
+      <summary class="btn btn-sm">Download ▾</summary>
+      <div class="menu-list">
+        <a href="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='gene', flank5=opts.flank5, flank3=opts.flank3) }}">Entire genomic sequence, {{ opts.flank5 }} bp 5′ / {{ opts.flank3 }} bp 3′ flanks (FASTA)</a>
+        <a href="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='cdna') }}">cDNA (FASTA)</a>
+        {% if view.protein %}<a href="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='protein') }}">Protein (FASTA)</a>{% endif %}
+      </div>
+    </details>
+    <a class="btn btn-sm" href="{{ url_for('page_design') }}?seed={{ (ids.mane_refseq or ids.refseq_mrna or requested) }}:c.">Design primers</a>
+    {% endif %}
+    {% if transcript %}
+    <a class="btn btn-sm" target="_blank" rel="noopener"
+       href="{{ ensembl_url }}/Transcript/Summary?t={{ transcript.id }}">Ensembl ↗</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if error %}<div class="note bad">{{ error }}</div>{% endif %}
+
+{% if view %}
+<div class="grid hit-grid">
+  <section class="card card-pad">
+    <h2>Transcript</h2>
+    <table class="twocol" style="margin-top:10px">
+      {% for k, v in summary %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+      {% if ids.refseq_mrna %}
+      <tr><th>At NCBI</th><td>
+        <a href="https://www.ncbi.nlm.nih.gov/nuccore/{{ ids.mane_refseq or ids.refseq_mrna }}" target="_blank" rel="noopener">{{ ids.mane_refseq or ids.refseq_mrna }}</a>
+        {% if ids.refseq_peptide %} · <a href="https://www.ncbi.nlm.nih.gov/protein/{{ ids.refseq_peptide }}" target="_blank" rel="noopener">{{ ids.refseq_peptide }}</a>{% endif %}
+      </td></tr>
+      {% endif %}
+    </table>
+    {% if gene and gene.transcripts|length > 1 %}
+    {% set others = gene.transcripts | rejectattr('id', 'equalto', transcript.id) | list %}
+    <h3 style="margin-top:14px">Other transcripts of {{ gene.name }}
+      <span class="small muted" style="font-weight:400">({{ others|length }})</span></h3>
+    <div class="row" style="margin-top:8px;gap:6px">
+      {% for t in others[:6] %}
+      <a class="btn btn-sm" href="{{ url_for('page_transcript', name=species_name, tid=t.id) }}"
+         title="{{ t.biotype.replace('_', ' ') }} · {{ '{:,}'.format(t.cdna_len or 0) }} bp{% if t.refseq_mrna %} · {{ t.refseq_mrna }}{% endif %}">
+        {{ t.refseq_mrna or t.id }}{% if t.mane %} ({{ 'MANE' if t.mane == 'MANE Select' else 'MANE+' }}){% endif %}</a>
+      {% endfor %}
+      {% if others|length > 6 %}
+      <a class="btn btn-sm" href="{{ url_for('page_transcripts', q=gene.name, species=species_name) }}">
+        All {{ gene.transcripts|length }} transcripts →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="card card-pad">
+    <h2>Configure this page</h2>
+    <form id="view-config" class="cfg-grid" style="margin-top:10px">
+      <input type="hidden" name="tab" value="{{ opts.tab }}">
+      {% for f in option_fields %}
+      <div><label for="opt_{{ f.name }}">{{ f.label }}</label>
+        <select id="opt_{{ f.name }}" name="{{ f.name }}">
+          {% for v in f['values'] %}<option value="{{ v.value }}" {{ 'selected' if v.value == f.value }}>{{ v.caption }}</option>{% endfor %}
+        </select></div>
+      {% endfor %}
+    </form>
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="btn btn-sm" id="view-reset">Reset options</button>
+      <span class="small muted">Changes apply immediately and are remembered.</span>
+    </div>
+  </section>
+</div>
+
+<div class="tabs" role="tablist" aria-label="Sequence views" style="margin-top:18px">
+  {% for key, label in tabs %}
+  <a role="tab" class="tab {{ 'active' if key == opts.tab }}" data-tab="{{ key }}"
+     aria-selected="{{ 'true' if key == opts.tab else 'false' }}"
+     href="{{ url_for('page_transcript', name=species_name, tid=requested, tab=key) }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<section class="card card-pad seq-card-view">
+  <div class="row" style="margin-bottom:10px">
+    <div>
+      {% if view.mode == 'cdna' %}
+      <h3>{{ view.title }} <span class="mono small muted" style="font-weight:500">{{ view.reference or transcript.id }}</span></h3>
+      <div class="small muted">{{ '{:,}'.format(view.cdna_length) }} bp · {{ view.exons }} exon{{ '' if view.exons == 1 else 's' }}{% if view.protein %} · coding sequence {{ '{:,}'.format(view.cds_length) }} bp · protein {{ '{:,}'.format(view.protein|length) }} aa{% endif %}{% if view.variants_shown and not view.pending %} · {{ '{:,}'.format(view.variant_count) }} variant{{ '' if view.variant_count == 1 else 's' }}{% endif %}</div>
+      {% else %}
+      <h3>{% if view.layout == 'spliced' %}Exons aligned with cDNA and protein{% elif view.mode == 'genomic' %}Entire genomic sequence{% else %}Genomic sequence aligned with cDNA and protein{% endif %}</h3>
+      <div class="small muted">{{ view.region.chrom }}:{{ '{:,}'.format(view.region.start) }}-{{ '{:,}'.format(view.region.end) }}
+        · {{ '{:,}'.format(view.region.end - view.region.start + 1) }} bp{% if view.layout == 'genomic' %} including {{ opts.flank5 }} bp 5′ and {{ opts.flank3 }} bp 3′ flanks{% endif %}
+        · shown 5′→3′ on the {{ 'forward' if view.region.strand > 0 else 'reverse' }} strand</div>
+      {% endif %}
+    </div>
+    <span class="spacer"></span>
+    {% if view.mode != 'cdna' %}
+    <button class="btn btn-sm" id="copy-genomic" type="button"
+      data-url="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='gene', flank5=opts.flank5, flank3=opts.flank3) }}">Copy genomic sequence</button>
+    <a class="btn btn-sm" href="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='gene', flank5=opts.flank5, flank3=opts.flank3) }}">Genomic FASTA</a>
+    {% endif %}
+    {% if view.mode != 'genomic' %}
+    <button class="btn btn-sm" id="copy-cdna" type="button">Copy cDNA</button>
+    {% if view.protein %}<button class="btn btn-sm" id="copy-protein" type="button">Copy protein</button>{% endif %}
+    <a class="btn btn-sm" href="{{ url_for('transcript_fasta', name=species_name, tid=requested, kind='cdna') }}">cDNA FASTA</a>
+    {% endif %}
+  </div>
+  {% for n in view.notes %}<div class="note info" style="margin-bottom:8px">{{ n }}</div>{% endfor %}
+  {% if view.pending %}
+  <div class="note info" id="pending-note" style="margin-bottom:8px"><span class="spin"></span>
+    <span>Fetching variants from Ensembl — the view updates when they arrive.</span></div>
+  {% endif %}
+  {% if view.legend %}
+  <div class="legend sv-legend">
+    {% for cls, label in view.legend %}<span class="li"><span class="sv-key {{ cls }}">A</span>{{ label }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  {% if view.mode == 'cdna' %}
+  <style>{{ csq_css|safe }}</style>
+  <div class="small muted tvc-help">Lines: {% if view.variants_shown %}variants · {% endif %}cDNA (numbered from the first base of the transcript){% if view.protein %}{% if opts.coding_display == 'on' %} · coding sequence (numbered from the A of the ATG){% endif %}{% if opts.protein_display == 'on' %} · protein{% endif %}{% endif %}.
+    {% if view.variants_shown %}Germline variants and COSMIC somatic mutations from Ensembl; underlined bases carry a variant, coloured by its consequence. Codes: <span class="mono tvc-code">R</span> A/G, <span class="mono tvc-code">Y</span> C/T, <span class="mono tvc-code">K</span> G/T, <span class="mono tvc-code">M</span> A/C, <span class="mono tvc-code">S</span> C/G, <span class="mono tvc-code">W</span> A/T, <span class="mono tvc-code">B D H V N</span> three or four alleles, <span class="mono tvc-code">*</span> insertion, deletion or somatic mutation. Where variants overlap, the shortest is shown. Click a code to open the variant in Ensembl; hover a base for all of its variants.{% endif %}</div>
+  {% endif %}
+  <div class="seqview-wrap"><pre class="seqview tv{{ ' tvc' if view.mode == 'cdna' else '' }}">{{ view.html|safe }}</pre></div>
+</section>
+{% endif %}
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script id="tx-data" type="application/json">{{ {
+  'view': 'transcript', 'species': species_name,
+  'pending': (view.pending if view and view.pending else []),
+  'sequence': (view.cdna if view else ''),
+  'protein': (view.protein if view else ''),
+  'name': (requested ~ ' ' ~ (transcript.gene_name if transcript else ''))}|tojson }}</script>
+<script src="{{ url_for('static', filename='blast.js') }}"></script>
+<script>BL.initTranscript(JSON.parse(document.getElementById('tx-data').textContent));</script>
+{% endblock %}

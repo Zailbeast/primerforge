@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} - BLAST/BLAT results{% endblock %}
+
+{% macro job_actions(sec) %}
+{% set j = sec.job %}
+{% if sec.downloads %}
+<details class="menu">
+  <summary class="btn btn-sm">Download results file ▾</summary>
+  <div class="menu-list">
+    {% for d in sec.downloads %}
+    <a href="{{ url_for('blast_download', jid=j.id, fmt=d.fmt) }}">{{ d.label }}</a>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+<a class="btn btn-sm" href="{{ url_for('page_blast', edit=ticket.id, job=j.id) }}">Edit &amp; resubmit</a>
+{% if j.status in ('queued', 'running') %}
+<button class="btn btn-sm" data-job-act="cancel" data-job-id="{{ j.id }}">Cancel</button>
+{% elif j.status in ('failed', 'cancelled') %}
+<button class="btn btn-sm" data-job-act="rerun" data-job-id="{{ j.id }}">Run again</button>
+{% endif %}
+<button class="btn btn-sm btn-danger" data-job-act="delete" data-job-id="{{ j.id }}">Delete</button>
+{% endmacro %}
+
+{% macro job_body(sec) %}
+{% set j = sec.job %}
+<details class="card section" {{ 'open' if j.status != 'done' and not pair }}>
+  <summary class="section-head"><h2>Job details</h2></summary>
+  <div class="card-pad" style="padding-top:0">
+    <table class="twocol">
+      <tr><th>Job name</th><td>{{ j.description or j.summary }}<div class="small muted">{{ j.summary }}</div></td></tr>
+      <tr><th>Species</th><td>{{ species_info.display_name }} <span class="muted"><i>{{ species_info.scientific_name }}</i></span></td></tr>
+      <tr><th>Assembly</th><td>{{ j.assembly or species_info.assembly }}</td></tr>
+      <tr><th>Search type</th><td>{{ ticket.search_caption }}</td></tr>
+      <tr><th>Sequence</th><td><pre class="input-seq">&gt;{{ j.seq_desc }}
+{% for i in range(0, j.sequence|length, 60) %}{{ j.sequence[i:i+60] }}
+{% endfor %}</pre>
+        <div class="small muted">{{ '{:,}'.format(j.sequence|length) }} {{ 'residues' if ticket.query_type == 'peptide' else 'bases' }}</div></td></tr>
+      <tr><th>Query type</th><td>{{ 'Protein' if ticket.query_type == 'peptide' else 'DNA' }}</td></tr>
+      <tr><th>DB type</th><td>{{ 'Protein database' if ticket.db_type == 'peptide' else 'DNA database' }}</td></tr>
+      <tr><th>Source</th><td>{{ ticket.source_label }}</td></tr>
+      {% if ticket.config_set %}<tr><th>Search sensitivity</th><td>{{ {'near': 'Near match', 'near_oligo': 'Short sequences', 'normal': 'Normal', 'distant': 'Distant homologies'}[ticket.config_set] }}</td></tr>{% endif %}
+      {% if config_groups %}
+      <tr><th>Configurations</th><td>
+        <table class="twocol cfg-table">
+          {% for g in config_groups %}
+          <tr><td colspan="2"><b>{{ g.title }}</b></td></tr>
+          {% for r in g.rows %}<tr><th>{{ r.label }}</th><td>{{ r.value }}</td></tr>{% endfor %}
+          {% endfor %}
+        </table>
+      </td></tr>
+      {% endif %}
+      {% if j.command %}
+      <tr><th>Command</th><td><pre class="input-seq command-text" style="white-space:pre-wrap;word-break:break-all">{{ j.command }}</pre>
+        <button type="button" class="copy copy-command">copy</button></td></tr>
+      {% endif %}
+    </table>
+  </div>
+</details>
+
+{% for n in j.notes %}<div class="note info section-note">{{ n }}</div>{% endfor %}
+
+{% if j.status in ('queued', 'running') %}
+<div class="card card-pad section">
+  <div class="progress-msg" style="margin:0"><span class="spin"></span>
+    <span class="job-live">{% if j.status == 'queued' %}Queued{% if sec.queue_position %} — position {{ sec.queue_position }} in the queue{% endif %}…{% else %}Running…{% endif %}</span></div>
+  <p class="small muted" style="margin:8px 0 0">This page refreshes when the job finishes.
+    {% if is_blat %}The first BLAT search after starting the app also loads the genome index in WSL, which takes a few seconds.{% endif %}
+    {% if ticket.search_type in ('NCBIBLAST_TBLASTN', 'NCBIBLAST_TBLASTX') and genomic %}Translated searches against a whole genome can take many minutes.{% endif %}</p>
+</div>
+{% elif j.status == 'failed' %}
+<div class="note bad section-note"><div><b>This job failed.</b> {{ j.message }}</div></div>
+{% elif j.status == 'cancelled' %}
+<div class="note section-note">This job was cancelled. {{ j.message or '' }}</div>
+{% elif j.n_hits == 0 %}
+<div class="card card-pad section">
+  <h2>No results found</h2>
+  <p class="dim" style="margin:8px 0 0">If you believe that there should be a match to your query sequence please adjust the
+    configuration parameters you selected and <a href="{{ url_for('page_blast', edit=ticket.id, job=j.id) }}">resubmit the search</a>.</p>
+</div>
+{% else %}
+  {% if j.n_found > j.n_hits %}<div class="note info section-note">{{ '{:,}'.format(j.n_found) }} alignments were found; the best {{ '{:,}'.format(j.n_hits) }} are shown.</div>{% endif %}
+  {% if j.role %}<div class="primer-summary section-note small dim"></div>{% endif %}
+
+  {% if species_info.karyotype %}
+  <details class="card section karyo-section" open>
+    <summary class="section-head"><h2>HSP distribution on genome</h2>
+      <span class="small muted karyo-count">{{ '{:,}'.format(j.n_hits) }} hit{{ '' if j.n_hits == 1 else 's' }}</span></summary>
+    <div class="card-pad" style="padding-top:0">
+      <div class="karyo-wrap"><div class="karyotype"></div></div>
+      <div class="small muted" style="margin-top:6px">Click an arrow for hit details, or a chromosome to open it in Ensembl.
+        <span class="karyo-note"></span></div>
+    </div>
+  </details>
+  {% endif %}
+
+  <details class="card section qplot-section">
+    <summary class="section-head"><h2>HSP distribution on query sequence</h2></summary>
+    <div class="card-pad" style="padding-top:0">
+      <div class="karyo-wrap"><div class="queryplot"></div></div>
+      <div class="small muted" style="margin-top:6px">The query is drawn as a chain of black and white boxes; shaded red
+        stretches also hit elsewhere in the database. Bars are coloured by %ID.</div>
+    </div>
+  </details>
+
+  <details class="card section" open>
+    <summary class="section-head"><h2>Results table</h2>
+      <span class="small muted">
+        {% if genomic and not species_info.has_annotation %}Overlapping genes are looked up from Ensembl as you page.{% endif %}
+      </span></summary>
+    <div class="card-pad results-table" style="padding-top:0"></div>
+  </details>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div style="min-width:0">
+    <div class="row small muted" style="gap:7px;margin-bottom:5px">
+      <a href="{{ url_for('page_blast') }}">BLAST/BLAT</a><span>/</span>
+      <span class="mono">{{ ticket.id }}</span>
+      {% if not pair and ticket.jobs|length > 1 %}<span>/</span><span>Job {{ job.job_number }}</span>{% endif %}
+    </div>
+    <h1>{{ page_title }}</h1>
+    <div class="meta">
+      <span><b>Search</b> {{ ticket.search_caption }}</span>
+      <span><b>Against</b> {{ species_info.display_name }} {{ species_info.assembly }} · {{ ticket.source_label }}</span>
+      <span><b>Submitted</b> {{ ticket.created_at|ts }}</span>
+      {% if not pair and job.finished_at and job.started_at %}<span><b>Took</b> {{ '%.1f'|format(job.finished_at - job.started_at) }}s</span>{% endif %}
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="row">
+    {% if pair %}
+    <a class="btn btn-sm" href="{{ url_for('page_blast', edit=ticket.id) }}">Edit &amp; resubmit pair</a>
+    <a class="btn btn-sm" href="{{ url_for('page_blast') }}">New job</a>
+    {% else %}
+    {{ job_actions(sections[0]) }}
+    <a class="btn btn-sm" href="{{ url_for('page_blast') }}">New job</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if pair %}
+  {% if species_tabs|length > 1 %}
+  <div class="job-tabs" role="tablist" aria-label="Species in this ticket">
+    {% for s in species_tabs %}
+    <a role="tab" class="job-tab {{ 'active' if s.species == job.species }}" href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=s.job_id) }}"
+       aria-selected="{{ 'true' if s.species == job.species else 'false' }}"><span>{{ s.label }}</span></a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <section class="card card-pad primer-pair">
+    <table class="primer-pair-tbl">
+      {% for sec in sections %}
+      <tr>
+        <th><a href="#job-{{ sec.job.id }}">{{ sec.label }}</a></th>
+        <td class="mono">5′-{{ sec.job.sequence }}-3′</td>
+        <td class="small muted num">{{ sec.job.sequence|length }} nt</td>
+        <td><span class="job-tab-status s-{{ sec.job.status }}">{{ sec.job.status }}{% if sec.job.status == 'done' %} · {{ '{:,}'.format(sec.job.n_hits) }} hits{% endif %}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="small muted" style="margin-top:8px">Each primer was searched separately and has its own division below.
+      <a href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=job.id, layout='single') }}">View one job at a time</a></div>
+  </section>
+
+  {% for sec in sections %}
+  <section class="division {{ 'division-' ~ sec.job.role if sec.job.role }}" id="job-{{ sec.job.id }}" data-job="{{ sec.job.id }}">
+    <header class="division-head">
+      <div style="min-width:0">
+        <div class="row" style="gap:10px">
+          <h2>{{ sec.label }}</h2>
+          <span class="badge {{ {'done': 'badge-good', 'failed': 'badge-crit', 'cancelled': 'badge-warn'}.get(sec.job.status, 'badge-muted') }}"><i class="bdot"></i>{{ sec.job.status }}{% if sec.job.status == 'done' %}: {{ '{:,}'.format(sec.job.n_hits) }} hit{{ '' if sec.job.n_hits == 1 else 's' }}{% endif %}</span>
+        </div>
+        <div class="mono small" style="margin-top:4px;word-break:break-all">5′-{{ sec.job.sequence }}-3′
+          <span class="muted">· {{ sec.job.sequence|length }} nt{% if sec.job.seq_desc %} · {{ sec.job.seq_desc }}{% endif %}</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="row">{{ job_actions(sec) }}</div>
+    </header>
+    {{ job_body(sec) }}
+  </section>
+  {% endfor %}
+{% else %}
+  {% if ticket.jobs|length > 1 %}
+  <div class="job-tabs" role="tablist" aria-label="Jobs in this ticket">
+    {% for j in ticket.jobs %}
+    <a role="tab" class="job-tab {{ 'active' if j.id == job.id }}" href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=j.id, layout='single' if pair_available else None) }}"
+       aria-selected="{{ 'true' if j.id == job.id else 'false' }}">
+      <span>{{ j.job_number }}. {{ (j.seq_desc or j.description)|truncate(34, True) }}</span>
+      <span class="small muted">{{ j.species.replace('_', ' ')|capitalize }}</span>
+      <span class="job-tab-status s-{{ j.status }}">{{ j.status }}{% if j.status == 'done' %} · {{ j.n_hits }}{% endif %}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% if pair_available %}
+  <div class="small" style="margin-top:8px"><a href="{{ url_for('page_blast_ticket', ticket_id=ticket.id, job=job.id) }}">View the forward and reverse primers together</a></div>
+  {% endif %}
+  {% endif %}
+  <section class="division-plain" id="job-{{ job.id }}" data-job="{{ job.id }}">
+    {{ job_body(sections[0]) }}
+  </section>
+{% endif %}
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script id="results-data" type="application/json">{{ {
+  'ticket': {'id': ticket.id, 'source': ticket.source, 'search_type': ticket.search_type, 'query_type': ticket.query_type},
+  'sections': js_sections,
+  'species': species_info, 'genomic': genomic, 'is_blat': is_blat, 'pair': pair}|tojson }}</script>
+<script src="{{ url_for('static', filename='blast.js') }}"></script>
+<script>BL.initResults(JSON.parse(document.getElementById('results-data').textContent));</script>
+{% endblock %}

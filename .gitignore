@@ -1,0 +1,11 @@
+# Downloaded genomes and databases, run history, accounts and the session secret key
+data/
+
+# Build and cache output
+dist/
+__pycache__/
+*.pyc
+
+# Local editor settings
+.vscode/
+.idea/

@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}{{ run.label or run.id }} - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="row small muted" style="gap:7px;margin-bottom:5px">
+      <a href="{{ url_for('page_runs') }}">Runs</a><span>/</span><span>{{ run.id }}</span>
+    </div>
+    <h1>{{ run.label or run.id }}</h1>
+    <div class="meta">
+      <span><b>Assay</b> {{ run.params.assay_name }}</span>
+      <span><b>Started</b> {{ run.created_at|ts }}</span>
+      <span><b>Took</b> {{ run|dur }}</span>
+      <span><b>Variants</b> {{ run.n_ok }} ok{% if run.n_failed %},
+        <span style="color:var(--crit-ink)">{{ run.n_failed }} failed</span>{% endif %}</span>
+      <span><b>Specificity</b> {{ 'in-silico PCR' if run.specificity else 'not checked' }}</span>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="row">
+    <a class="btn btn-sm" href="{{ url_for('export', run_id=run.id, fmt='csv') }}">CSV</a>
+    <a class="btn btn-sm" href="{{ url_for('export', run_id=run.id, fmt='fasta') }}">FASTA</a>
+    <a class="btn btn-sm" href="{{ url_for('export', run_id=run.id, fmt='json') }}">JSON</a>
+    <button class="btn btn-sm btn-danger" id="del-run">Delete</button>
+  </div>
+</div>
+
+{% if run.status == 'running' %}
+<div class="note info" style="margin-bottom:16px">
+  <span class="spin"></span> This run is still in progress — the page will refresh
+  when it finishes.
+</div>
+{% endif %}
+{% if run.error %}
+<div class="note bad" style="margin-bottom:16px">{{ run.error }}</div>
+{% endif %}
+
+<div id="variants"></div>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='blast.js') }}"></script>
+<script id="run-data" type="application/json">{{ run|tojson }}</script>
+<script>
+(function () {
+  const run = JSON.parse(document.getElementById('run-data').textContent);
+  const host = document.getElementById('variants');
+  const E = PF.esc, C = PF.commas;
+
+  const SPEC_BADGE = {
+    'unique':           ['badge-good', 'unique product'],
+    'minor off-target': ['badge-warn', 'minor off-target'],
+    'non-specific':     ['badge-crit', 'non-specific'],
+    'no product':       ['badge-crit', 'no product'],
+    'error':            ['badge-muted', 'check failed'],
+    'unavailable':      ['badge-muted', 'not checked']
+  };
+  const specBadge = (s) => {
+    if (!s || !s.status) return `<span class="badge badge-muted"><i class="bdot"></i>not checked</span>`;
+    const [cls, txt] = SPEC_BADGE[s.status] || ['badge-muted', s.status];
+    return `<span class="badge ${cls}" title="${E(s.message || '')}"><i class="bdot"></i>${E(txt)}</span>`;
+  };
+
+  // 0 is a real, good result for hairpin/dimer melting points - never blank it.
+  const num = (v, d = 0) => (v === null || v === undefined) ? '–' : Number(v).toFixed(d);
+
+  function oligoRow(o, name) {
+    return `<tr>
+      <td style="white-space:nowrap"><b>${name}</b></td>
+      <td><span class="seq">${E(o.seq)}</span>
+          <button class="copy" data-copy="${E(o.seq)}">copy</button></td>
+      <td class="num">${o.len}</td>
+      <td class="num">${num(o.tm, 1)}</td>
+      <td class="num">${num(o.gc)}%</td>
+      <td class="num">${num(o.hairpin)}</td>
+      <td class="num">${num(o.self_end)}</td>
+      <td class="num">${num(o.repeat_frac * 100)}%</td>
+      <td class="mono small muted" style="white-space:nowrap">${C(o.start)}–${C(o.end)}</td>
+    </tr>`;
+  }
+
+  function pairBlock(v, p, i) {
+    const loc = v.locus;
+    const spec = p.specificity || {};
+    const warn = p.warnings || [];
+    const offs = (spec.off_target || []);
+    return `
+    <div class="pair ${i === 0 ? 'best open' : ''}" data-pair="${i}">
+      <div class="pair-head">
+        <span class="rank">Pair ${p.rank + 1}${i === 0 ? ' · best' : ''}</span>
+        <span class="small dim">${C(p.product_size)} bp</span>
+        <span class="small dim">Tm ${p.left.tm.toFixed(1)} / ${p.right.tm.toFixed(1)} °C</span>
+        <span class="small dim">penalty ${p.penalty.toFixed(2)}</span>
+        ${specBadge(spec)}
+        ${warn.length ? `<span class="badge badge-warn"><i class="bdot"></i>${warn.length} note${warn.length > 1 ? 's' : ''}</span>` : ''}
+        <span class="spacer"></span>
+        <span class="small muted">details ▾</span>
+      </div>
+      <div class="pair-body">
+        <div class="ampholder" data-variant="${v.id}" data-idx="${i}"></div>
+        <div class="tbl-wrap" style="margin-top:12px">
+          <table class="tbl">
+            <thead><tr>
+              <th>Primer</th><th>Sequence (5'→3')</th><th class="num">nt</th>
+              <th class="num">Tm °C</th><th class="num">GC</th><th class="num">Hairpin</th>
+              <th class="num">3' dimer</th><th class="num">Repeat</th><th>Position</th>
+            </tr></thead>
+            <tbody>
+              ${oligoRow(p.left, 'Forward')}
+              ${oligoRow(p.right, 'Reverse')}
+            </tbody>
+          </table>
+        </div>
+        ${p.amplicon_seq ? `<div class="row" style="margin-top:10px">
+          <button class="btn btn-sm" data-blast-fwd="${E(p.left.seq)}" data-blast-rev="${E(p.right.seq)}"
+            data-blast-name="${E((loc.gene || loc.chrom) + ' pair ' + (p.rank + 1))}"
+            title="Search the forward and reverse primers genome-wide, each in its own division">BLAST primers</button>
+          <button class="btn btn-sm" data-blast-seq="${E(p.amplicon_seq.toUpperCase())}"
+            data-blast-name="${E((loc.gene || loc.chrom) + ' pair ' + (p.rank + 1) + ' amplicon ' + loc.chrom + ':' + p.amplicon.start + '-' + p.amplicon.end)}"
+            title="Search this amplicon with the BLAST/BLAT tool">BLAST/BLAT amplicon</button>
+        </div>` : ''}
+        <div class="kv">
+          <div><div class="k">Product</div><div class="v">${C(p.product_size)} bp</div></div>
+          <div><div class="k">Variant at</div><div class="v">+${C(p.variant_pos_in_amplicon)}</div></div>
+          <div><div class="k">To forward</div><div class="v">${C(p.dist_left)} bp</div></div>
+          <div><div class="k">To reverse</div><div class="v">${C(p.dist_right)} bp</div></div>
+          <div><div class="k">Tm difference</div><div class="v">${p.tm_diff.toFixed(1)} °C</div></div>
+          <div><div class="k">Pair 3' dimer</div><div class="v">${p.compl_end.toFixed(0)}</div></div>
+        </div>
+        ${warn.length ? `<div style="margin-top:12px;display:grid;gap:6px">
+            ${warn.map(w => `<div class="note">⚠ ${E(w)}</div>`).join('')}</div>` : ''}
+        ${spec.status && spec.status !== 'unavailable' ? `
+          <div style="margin-top:12px" class="small dim">
+            <b>In-silico PCR:</b> ${E(spec.message || '')}
+            ${spec.binding_sites ? ` · genome-wide 3'-anchored binding sites:
+              forward ${spec.binding_sites.left}, reverse ${spec.binding_sites.right}` : ''}
+            ${offs.length ? `<div class="tbl-wrap" style="margin-top:8px">
+              <table class="tbl"><thead><tr><th>Off-target product</th>
+                <th class="num">Size</th><th class="num">Mismatches</th><th>Primers</th></tr></thead>
+              <tbody>${offs.map(a => `<tr>
+                <td class="mono small">${E(a.chrom)}:${C(a.start)}–${C(a.end)}</td>
+                <td class="num">${C(a.size)} bp</td>
+                <td class="num">${a.mismatches}</td>
+                <td class="small muted">${E(a.fwd.split('_').pop())}/${E(a.rev.split('_').pop())}</td>
+              </tr>`).join('')}</tbody></table></div>` : ''}
+          </div>` : ''}
+        ${p.snps && p.snps.status === 'checked' ? (() => {
+            const all = [...(p.snps.left || []), ...(p.snps.right || [])];
+            return all.length
+              ? `<div class="small dim" style="margin-top:10px"><b>Common variants under primers:</b>
+                   ${all.map(h => `${E(h.id)} (AF ${(h.af * 100).toFixed(1)}%${h.critical ? ', at 3′ end' : ''})`).join(', ')}</div>`
+              : `<div class="small muted" style="margin-top:10px">No gnomAD variant above
+                   ${(p.snps.min_af * 100).toFixed(0)}% frequency under either primer.</div>`;
+          })() : ''}
+      </div>
+    </div>`;
+  }
+
+  function variantCard(v) {
+    if (v.status !== 'ok') {
+      return `<section class="card variant-card">
+        <div class="variant-head">
+          <div><div class="vt">${E(v.input_hgvs)}</div>
+            <div class="meta"><span class="badge badge-crit"><i class="bdot"></i>failed</span></div>
+          </div>
+        </div>
+        <div class="card-pad"><div class="note bad">${E(v.error || 'Unknown error')}</div></div>
+      </section>`;
+    }
+    const loc = v.locus;
+    const notes = [...(loc.notes || []), ...(v.warnings || []),
+                   ...((v.template && v.template.warnings) || [])];
+    return `<section class="card variant-card" data-vid="${v.id}">
+      <div class="variant-head">
+        <div style="min-width:0">
+          <div class="vt">${E(loc.gene || loc.chrom)}
+            <span class="mono" style="font-weight:500;font-size:14px;color:var(--ink-2)">
+              ${E((loc.hgvs_c || loc.hgvs_g || '').split(':').pop())}</span>
+            ${loc.hgvs_p ? `<span class="mono" style="font-weight:500;font-size:14px;color:var(--muted)">
+              ${E(loc.hgvs_p.split(':').pop())}</span>` : ''}
+          </div>
+          <div class="meta">
+            <span><b>Input</b> <span class="mono">${E(v.input_hgvs)}</span></span>
+            <span><b>Position</b> chr${E(loc.chrom)}:${C(loc.start)}${loc.end !== loc.start ? '–' + C(loc.end) : ''}</span>
+            <span><b>Change</b> ${E(loc.ref)} → ${E(loc.alt)} (${E(loc.vtype)})</span>
+            ${loc.exon ? `<span><b>Exon</b> ${E(loc.exon)}</span>` : ''}
+            ${loc.intron ? `<span><b>Intron</b> ${E(loc.intron)}</span>` : ''}
+            ${loc.consequence ? `<span><b>Effect</b> ${E(loc.consequence.replace(/_/g, ' '))}</span>` : ''}
+            ${loc.rsid ? `<span><b>dbSNP</b> ${E(loc.rsid)}</span>` : ''}
+            ${loc.mane ? `<span><b>MANE</b> ${E(loc.mane)}</span>` : ''}
+          </div>
+          <div class="meta">
+            <span><b>Genomic HGVS</b> <span class="mono">${E(loc.hgvs_g || '')}</span>
+              <button class="copy" data-copy="${E(loc.hgvs_g || '')}">copy</button></span>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div style="text-align:right">
+          <div class="small muted">${v.pairs.length} pair${v.pairs.length === 1 ? '' : 's'}</div>
+          <div class="small muted">template ${C((v.template && v.template.length) || 0)} bp
+            · ${E((v.template && v.template.source) || '')}</div>
+        </div>
+      </div>
+      <div class="card-pad">
+        ${notes.length ? `<div style="display:grid;gap:6px;margin-bottom:14px">
+          ${notes.map(n => `<div class="note info">${E(n)}</div>`).join('')}</div>` : ''}
+        ${v.pairs.map((p, i) => pairBlock(v, p, i)).join('')}
+      </div>
+    </section>`;
+  }
+
+  function render() {
+    if (!run.variants.length) {
+      host.innerHTML = '<div class="card card-pad empty">No variants in this run.</div>';
+      return;
+    }
+    host.innerHTML = run.variants.map(variantCard).join('');
+
+    // Amplicon diagrams for whichever pair panels are open.
+    run.variants.forEach(v => {
+      if (v.status !== 'ok') return;
+      v.pairs.forEach((p, i) => {
+        const holder = host.querySelector(`.ampholder[data-variant="${v.id}"][data-idx="${i}"]`);
+        if (holder) PF.amplicon(holder, v.locus, p);
+      });
+    });
+
+    host.querySelectorAll('.pair-head').forEach(h => {
+      h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
+    });
+    host.querySelectorAll('[data-copy]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        PF.copy(b.dataset.copy, 'Copied ' + b.dataset.copy.slice(0, 28));
+      });
+    });
+    host.querySelectorAll('[data-blast-fwd]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        BL.blastPrimers(b.dataset.blastName, b.dataset.blastFwd, b.dataset.blastRev, 'homo_sapiens');
+      });
+    });
+    host.querySelectorAll('[data-blast-seq]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        BL.blastSequence(b.dataset.blastName, b.dataset.blastSeq, 'homo_sapiens');
+      });
+    });
+  }
+
+  render();
+  document.addEventListener('pf:theme', render);
+
+  document.getElementById('del-run').addEventListener('click', async () => {
+    if (!confirm('Delete this run permanently? This cannot be undone.')) return;
+    await PF.post('/api/run/' + run.id + '/delete', {});
+    window.location = '/runs';
+  });
+
+  if (run.status === 'running') {
+    PF.pollProgress(run.id, () => {}, () => window.location.reload());
+  }
+})();
+</script>
+{% endblock %}

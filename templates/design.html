@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Design primers - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Design primers from a variant</h1>
+    <p class="sub">Paste HGVS nomenclature and PrimerForge resolves it to genomic
+      coordinates, pulls the reference sequence and picks primer pairs with Primer3.
+      One variant per line, or paste a whole worklist.</p>
+  </div>
+</div>
+
+<div class="grid" style="grid-template-columns: minmax(0,1.55fr) minmax(0,1fr); align-items:start;"
+     id="layout">
+  <!-- ------------------------------------------------ design form -->
+  <section class="card card-pad">
+    <form id="design-form">
+      <label class="field" for="variants">Variants</label>
+      <textarea id="variants" name="variants" rows="6" spellcheck="false"
+        placeholder="NM_000546.6:c.215C>G&#10;NM_000492.4:c.1521_1523del&#10;NC_000017.11:g.7676154G>C&#10;rs334"></textarea>
+      <div class="hint">
+        Accepts coding HGVS (<code>NM_000546.6:c.215C&gt;G</code>), genomic HGVS
+        (<code>NC_000017.11:g.7676154G&gt;C</code>), plain coordinates
+        (<code>17-7676154-G-C</code>) and rsIDs.
+      </div>
+      <div class="row" style="margin-top:9px">
+        <span class="small muted">Try:</span>
+        {% for ex, note in [
+            ('NM_000546.6:c.215C>G', 'TP53 p.Pro72Arg'),
+            ('NM_000492.4:c.1521_1523del', 'CFTR F508del'),
+            ('rs334', 'HBB sickle cell'),
+            ('NM_007294.4:c.68_69del', 'BRCA1 185delAG')] %}
+          <button type="button" class="btn btn-sm example" data-v="{{ ex }}"
+                  title="{{ note }}">{{ note }}</button>
+        {% endfor %}
+      </div>
+      <div class="vlist" id="vlist"></div>
+
+      <hr class="rule">
+
+      <label class="field">Assay</label>
+      <div class="choices">
+        {% for key, p in presets.items() %}
+        <label class="choice">
+          <input type="radio" name="assay" value="{{ key }}" {{ 'checked' if loop.first }}>
+          <span class="choice-body">
+            <strong>{{ p.name }}</strong>
+            <span>{{ p.blurb }}</span>
+            <span style="margin-top:6px;color:var(--muted)">
+              {{ p.product[0][0] }}-{{ p.product[0][1] }} bp product ·
+              {{ p.margin }} bp clearance</span>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <details class="adv">
+        <summary>Advanced parameters</summary>
+        <div class="param-grid">
+          <div><label for="product_min">Min product (bp)</label>
+            <input type="number" id="product_min" name="product_min" placeholder="preset"></div>
+          <div><label for="product_max">Max product (bp)</label>
+            <input type="number" id="product_max" name="product_max" placeholder="preset"></div>
+          <div><label for="tm_opt">Optimum Tm (&deg;C)</label>
+            <input type="number" step="0.5" id="tm_opt" name="tm_opt" placeholder="preset"></div>
+          <div><label for="tm_min">Min Tm (&deg;C)</label>
+            <input type="number" step="0.5" id="tm_min" name="tm_min" placeholder="preset"></div>
+          <div><label for="tm_max">Max Tm (&deg;C)</label>
+            <input type="number" step="0.5" id="tm_max" name="tm_max" placeholder="preset"></div>
+          <div><label for="margin">Variant clearance (bp)</label>
+            <input type="number" id="margin" name="margin" placeholder="preset"></div>
+          <div><label for="gc_min">Min GC (%)</label>
+            <input type="number" id="gc_min" name="gc_min" placeholder="preset"></div>
+          <div><label for="gc_max">Max GC (%)</label>
+            <input type="number" id="gc_max" name="gc_max" placeholder="preset"></div>
+          <div><label for="n_return">Pairs per variant</label>
+            <input type="number" id="n_return" name="n_return" value="5" min="1" max="20"></div>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <label class="check"><input type="checkbox" id="check_specificity" checked
+            {{ 'disabled' if not env.blast_ready }}>
+            <span>Check specificity by in-silico PCR
+              {% if not env.blast_ready %}
+                <a href="{{ url_for('page_settings') }}">(needs local genome)</a>
+              {% endif %}</span></label>
+        </div>
+      </details>
+
+      <div style="margin-top:16px">
+        <label class="field" for="label">Run label <span class="muted"
+          style="font-weight:400">— optional, makes this run easy to find later</span></label>
+        <input type="text" id="label" name="label"
+               placeholder="e.g. Batch 42 — familial breast cancer confirmations">
+      </div>
+
+      <div class="row" style="margin-top:18px">
+        <button type="submit" class="btn btn-primary" id="run-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 3.5l14 8.5-14 8.5z"/></svg>
+          Design primers
+        </button>
+        <span class="small muted" id="count-msg"></span>
+      </div>
+
+      <div class="progress-wrap" id="progress">
+        <div class="bar"><i id="bar-fill"></i></div>
+        <div class="progress-msg"><span class="spin"></span><span id="prog-text">Starting…</span></div>
+      </div>
+      <div id="form-error" style="margin-top:14px"></div>
+    </form>
+  </section>
+
+  <!-- ------------------------------------------------ side panel -->
+  <aside class="grid">
+    <div class="card card-pad">
+      <h2>Recent runs</h2>
+      {% if recent %}
+      <div class="grid" style="gap:8px;margin-top:12px">
+        {% for r in recent %}
+        <a href="{{ url_for('page_run', run_id=r.id) }}"
+           style="display:block;padding:10px 12px;border:1px solid var(--border);
+                  border-radius:10px;color:inherit">
+          <div class="row" style="gap:8px">
+            <span style="font-weight:560;font-size:13px">{{ r.label or r.id }}</span>
+            <span class="spacer"></span>
+            {% if r.status == 'ok' %}<span class="badge badge-good"><i class="bdot"></i>ok</span>
+            {% elif r.status == 'partial' %}<span class="badge badge-warn"><i class="bdot"></i>partial</span>
+            {% elif r.status == 'running' %}<span class="badge badge-muted"><i class="bdot"></i>running</span>
+            {% else %}<span class="badge badge-crit"><i class="bdot"></i>failed</span>{% endif %}
+          </div>
+          <div class="small muted" style="margin-top:3px">
+            {{ r.genes or '-' }} · {{ r.n_input }} variant{{ '' if r.n_input == 1 else 's' }}
+            · {{ r.created_at|ts }}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      <a class="btn btn-sm" style="margin-top:12px" href="{{ url_for('page_runs') }}">
+        View all runs and charts</a>
+      {% else %}
+      <p class="small muted" style="margin-top:10px">
+        No runs yet. Design your first primer pair and it will appear here — every run
+        is saved so you can compare and re-export later.</p>
+      {% endif %}
+    </div>
+
+    <div class="card card-pad">
+      <h2>How it works</h2>
+      <ol class="small dim" style="margin:10px 0 0;padding-left:19px;line-height:1.75">
+        <li>HGVS is resolved to GRCh38 coordinates via Ensembl VEP, with the gene,
+            exon and protein change.</li>
+        <li>Reference sequence is pulled around the variant
+            ({{ 'local genome' if env.genome_ready else 'Ensembl REST' }}).</li>
+        <li>Primer3 picks pairs that keep the variant clear of both primers.</li>
+        <li>Common variants under each primer are flagged from gnomAD allele
+            frequencies.</li>
+        <li>{% if env.blast_ready %}Primers are BLASTed genome-wide and paired into
+            predicted amplicons.{% else %}
+            <span class="muted">In-silico PCR is off — install the local genome in
+            Settings.</span>{% endif %}</li>
+      </ol>
+    </div>
+  </aside>
+</div>
+
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const form = document.getElementById('design-form');
+  const ta = document.getElementById('variants');
+  const vlist = document.getElementById('vlist');
+  const countMsg = document.getElementById('count-msg');
+  const runBtn = document.getElementById('run-btn');
+  const progress = document.getElementById('progress');
+  const barFill = document.getElementById('bar-fill');
+  const progText = document.getElementById('prog-text');
+  const formError = document.getElementById('form-error');
+
+  // A transcript page can hand over an accession to start a variant from.
+  const seed = new URLSearchParams(location.search).get('seed');
+  if (seed && !ta.value.trim()) {
+    ta.value = seed;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
+  document.querySelectorAll('.example').forEach(b => b.addEventListener('click', () => {
+    const cur = ta.value.trim();
+    ta.value = (cur ? cur + '\n' : '') + b.dataset.v;
+    validate();
+    ta.focus();
+  }));
+
+  // Instant, offline syntax feedback.
+  const validate = PF.debounce(async () => {
+    const text = ta.value.trim();
+    if (!text) { vlist.innerHTML = ''; countMsg.textContent = ''; return; }
+    const r = await PF.post('/api/validate', { text });
+    vlist.innerHTML = r.items.map(it => it.ok
+      ? `<div class="vitem ok"><span class="vmark">✓</span>
+           <span class="vtxt">${PF.esc(it.cleaned)}</span></div>`
+      : `<div class="vitem bad"><span class="vmark">✕</span>
+           <span class="vtxt">${PF.esc(it.input)}</span>
+           <span class="verr">${PF.esc(it.error)}</span></div>`).join('');
+    countMsg.textContent = r.n_bad
+      ? `${r.n_bad} of ${r.items.length} need fixing`
+      : `${r.n_ok} variant${r.n_ok === 1 ? '' : 's'} ready`;
+    runBtn.disabled = r.n_ok === 0;
+  }, 300);
+  ta.addEventListener('input', validate);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    formError.innerHTML = '';
+    const params = {};
+    ['product_min','product_max','tm_opt','tm_min','tm_max','margin','gc_min','gc_max','n_return']
+      .forEach(k => { const v = document.getElementById(k).value; if (v !== '') params[k] = v; });
+
+    runBtn.disabled = true;
+    progress.classList.add('on');
+    barFill.style.width = '0%';
+    progText.textContent = 'Starting…';
+
+    let res;
+    try {
+      res = await PF.post('/api/design', {
+        variants: ta.value,
+        assay: form.querySelector('input[name=assay]:checked').value,
+        label: document.getElementById('label').value,
+        check_specificity: document.getElementById('check_specificity').checked,
+        params
+      });
+    } catch (err) {
+      progress.classList.remove('on');
+      runBtn.disabled = false;
+      formError.innerHTML = `<div class="note bad">${PF.esc(err.message)}</div>`;
+      return;
+    }
+
+    PF.pollProgress(res.run_id, (p) => {
+      barFill.style.width = (p.pct || 0) + '%';
+      progText.textContent = p.current
+        ? `${p.stage} — ${p.current}  (${p.done}/${p.total})`
+        : `${p.stage}…`;
+    }, () => { window.location = '/run/' + res.run_id; });
+  });
+})();
+</script>
+{% endblock %}

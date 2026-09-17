@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Transcripts - PrimerForge{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Transcripts</h1>
+    <p class="sub">Look up a gene and see its transcripts with the MANE Select transcript first,
+      each with its RefSeq (NM/NP) and Ensembl accessions. Open one to read its cDNA aligned to
+      the genome with the protein translation, or to search it with BLAST/BLAT.</p>
+  </div>
+</div>
+
+<form class="card card-pad" method="get" action="{{ url_for('page_transcripts') }}">
+  <div class="row" style="align-items:flex-end;gap:12px">
+    <div style="flex:1;min-width:260px">
+      <label class="field" for="q">Gene symbol, accession or ID</label>
+      <input type="search" id="q" name="q" value="{{ query }}" autofocus
+             placeholder="GALE, TP53, NM_001008216, ENST00000617979, ENSG00000117308, HGNC:4116">
+    </div>
+    {% if species_options|length > 1 %}
+    <div>
+      <label class="field" for="species">Species</label>
+      <select id="species" name="species" style="width:auto;min-width:170px">
+        {% for s in species_options %}
+        <option value="{{ s.name }}" {{ 'selected' if s.name == species_name }}>{{ s.display_name }} {{ s.assembly }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <button class="btn btn-primary" type="submit">Search</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <span class="small muted">Try:</span>
+    {% for ex in ['GALE', 'TP53', 'NM_000546', 'CFTR', 'BRCA1'] %}
+    <a class="btn btn-sm" href="{{ url_for('page_transcripts', q=ex, species=species_name) }}">{{ ex }}</a>
+    {% endfor %}
+  </div>
+  {% if not has_ids %}
+  <div class="note" style="margin-top:12px">RefSeq accessions and MANE Select flags need the
+    <b>Transcript identifiers</b> component. <a href="{{ url_for('page_settings') }}#species">Install it in Settings</a>.</div>
+  {% endif %}
+</form>
+
+{% if error %}<div class="note bad section-note">{{ error }}</div>{% endif %}
+
+{% for gene in results %}
+<section class="card card-pad section">
+  <div class="row" style="align-items:flex-start">
+    <div>
+      <h2>{{ gene.name }} <span class="muted" style="font-weight:500">{{ gene.description or '' }}</span></h2>
+      <div class="meta">
+        <span><b>Location</b> {{ gene.chrom }}:{{ '{:,}'.format(gene.start) }}-{{ '{:,}'.format(gene.end) }}
+          ({{ '+' if gene.strand > 0 else '−' }})</span>
+        <span><b>Ensembl</b> <a href="{{ ensembl_url }}/Gene/Summary?g={{ gene.id }}" target="_blank" rel="noopener">{{ gene.id }}</a></span>
+        {% if gene.hgnc %}<span><b>HGNC</b> <a href="https://www.genenames.org/tools/search/#!/?query={{ gene.hgnc }}" target="_blank" rel="noopener">{{ gene.hgnc }}</a></span>{% endif %}
+        {% if gene.ncbi_gene %}<span><b>NCBI Gene</b> <a href="https://www.ncbi.nlm.nih.gov/gene/{{ gene.ncbi_gene }}" target="_blank" rel="noopener">{{ gene.ncbi_gene }}</a></span>{% endif %}
+        <span><b>Biotype</b> {{ (gene.biotype or '').replace('_', ' ') }}</span>
+      </div>
+    </div>
+  </div>
+  <div class="tbl-wrap" style="margin-top:12px">
+    <table class="tbl">
+      <thead><tr>
+        <th>Transcript</th><th>RefSeq</th><th></th><th>Biotype</th>
+        <th class="num">Exons</th><th class="num">cDNA</th><th class="num">Protein</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for t in gene.transcripts %}
+        <tr>
+          <td style="white-space:nowrap">
+            <a href="{{ url_for('page_transcript', name=species_name, tid=t.id) }}">{{ t.id }}{% if t.version %}.{{ t.version }}{% endif %}</a>
+            {% if t.name %}<div class="small muted">{{ t.name }}</div>{% endif %}
+          </td>
+          <td style="white-space:nowrap">{% if t.refseq_mrna %}
+            <a href="https://www.ncbi.nlm.nih.gov/nuccore/{{ t.refseq_mrna }}" target="_blank" rel="noopener">{{ t.refseq_mrna }}</a>
+            {% if t.refseq_peptide %}<div class="small muted">{{ t.refseq_peptide }}</div>{% endif %}
+          {% else %}<span class="muted">–</span>{% endif %}</td>
+          <td style="white-space:nowrap">
+            {% if t.mane == 'MANE Select' %}<span class="badge badge-good"><i class="bdot"></i>MANE Select</span>
+            {% elif t.mane %}<span class="badge badge-warn"><i class="bdot"></i>{{ t.mane }}</span>
+            {% elif t.canonical %}<span class="badge badge-muted"><i class="bdot"></i>canonical</span>{% endif %}
+          </td>
+          <td class="small dim">{{ (t.biotype or '').replace('_', ' ') }}</td>
+          <td class="num">{{ t.n_exons }}</td>
+          <td class="num">{{ '{:,}'.format(t.cdna_len or 0) }} bp</td>
+          <td class="num">{% if t.protein_len %}{{ '{:,}'.format(t.protein_len) }} aa{% else %}<span class="muted">–</span>{% endif %}</td>
+          <td style="white-space:nowrap">
+            <a class="btn btn-sm" href="{{ url_for('page_transcript', name=species_name, tid=t.id) }}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+<div class="toast" id="toast"></div>
+{% endblock %}
