@@ -26,7 +26,9 @@ if (( PURGE )); then
   fi
 fi
 
-for unit in primerforge-setup primerforge-proxy primerforge; do
+systemctl disable --now primerforge-backup.timer >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/primerforge-backup.timer
+for unit in primerforge-setup primerforge-proxy primerforge-backup primerforge; do
   systemctl disable --now "$unit" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$unit.service"
 done

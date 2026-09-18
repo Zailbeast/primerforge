@@ -7,6 +7,7 @@
     python -m primerforge.cli users disable|enable|delete alice
     python -m primerforge.cli users has-admin          # exit status 0 if one exists
     python -m primerforge.cli setup-data [--species homo_sapiens,mus_musculus] [--no-genome]
+    python -m primerforge.cli backup [--dir /srv/backups] [--keep 14]
     python -m primerforge.cli status
 
 On the server the `primerforge` command runs these as the service account with
@@ -126,6 +127,30 @@ def cmd_setup_data(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    """A consistent copy of runs, tickets and accounts, safe while the server runs.
+
+    Only the database is copied. Genomes and BLAST databases are large and can
+    always be downloaded again with `setup-data`, so backing them up would cost
+    tens of gigabytes to protect nothing that is not reproducible.
+    """
+    store.init()
+    directory = Path(args.dir) if args.dir else config.DATA_DIR / "backups"
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = store.backup(directory / f"primerforge-{stamp}.sqlite")
+    removed = store.prune_cache()
+    kept = sorted(directory.glob("primerforge-*.sqlite"))
+    for old in kept[:-args.keep] if args.keep > 0 else []:
+        old.unlink(missing_ok=True)
+    size = target.stat().st_size / (1024 * 1024)
+    print(f"Backed up to {target} ({size:.1f} MB)")
+    if args.keep > 0 and len(kept) > args.keep:
+        print(f"Removed {len(kept) - args.keep} older backup(s); keeping the newest {args.keep}.")
+    if removed:
+        print(f"Pruned {removed} expired cache row(s).")
+    return 0
+
+
 def cmd_status(_args) -> int:
     sys.path.insert(0, str(ROOT))
     from tools.setup_genome import read_status as genome_status
@@ -188,6 +213,12 @@ def main(argv: list[str] | None = None) -> int:
     data.add_argument("--attempts", type=int, default=4, help="tries per step")
     data.add_argument("--retry-wait", type=int, default=120, help="seconds between tries")
     data.set_defaults(func=cmd_setup_data)
+
+    backup = sub.add_parser("backup", help="copy the database (runs, tickets, accounts)")
+    backup.add_argument("--dir", default="", help="where to write it (default: DATA/backups)")
+    backup.add_argument("--keep", type=int, default=14,
+                        help="how many backups to keep; 0 keeps all")
+    backup.set_defaults(func=cmd_backup)
 
     sub.add_parser("status", help="what is installed").set_defaults(func=cmd_status)
 

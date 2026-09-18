@@ -11,6 +11,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 
 from .config import DB_PATH, ensure_dirs
@@ -133,6 +134,35 @@ def cache_put(key: str, value: Any) -> None:
         )
 
 
+# Nothing reads a cached Ensembl response older than 90 days (the longest max_age
+# any caller asks for), so those rows are dead weight; on a shared server they
+# would otherwise grow without limit.
+CACHE_MAX_AGE = 90 * 86400
+
+
+def prune_cache(max_age: float = CACHE_MAX_AGE) -> int:
+    """Delete cache rows too old for any caller to use. Returns the row count."""
+    with db() as conn:
+        cur = conn.execute("DELETE FROM cache WHERE created_at < ?", (time.time() - max_age,))
+        return cur.rowcount
+
+
+def backup(target: Path) -> Path:
+    """Copy the database to `target` using SQLite's online backup.
+
+    Safe while the server is running and while WAL writes are in flight, which
+    plain file copying is not: the result is always a consistent database.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with db() as conn:
+        dest = sqlite3.connect(target)
+        try:
+            conn.backup(dest)
+        finally:
+            dest.close()
+    return target
+
+
 # --------------------------------------------------------------------------
 # Runs
 # --------------------------------------------------------------------------
@@ -147,6 +177,30 @@ def create_run(label: str, assay: str, input_raw: str, params: dict, n_input: in
              n_input, int(specificity)),
         )
     return run_id
+
+
+def abandon_running_runs(message: str) -> int:
+    """Close runs whose process died, and report how many there were.
+
+    A design run lives on a worker thread, so a restart leaves its row at
+    'running' with nothing left to finish it. Unlike a BLAST job it cannot be
+    requeued: the variants designed before the restart are already stored, and
+    repeating them would duplicate rows. The run is closed with what it managed
+    to produce instead, so the page says what happened rather than hanging.
+    """
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM runs WHERE status='running'").fetchall()
+        for row in rows:
+            counts = conn.execute(
+                "SELECT COALESCE(SUM(status='ok'), 0) AS ok,"
+                " COALESCE(SUM(status<>'ok'), 0) AS failed"
+                " FROM variants WHERE run_id=?", (row["id"],)).fetchone()
+            conn.execute(
+                "UPDATE runs SET status=?, finished_at=?, n_ok=?, n_failed=?, error=?"
+                " WHERE id=?",
+                ("partial" if counts["ok"] else "failed", time.time(),
+                 counts["ok"], counts["failed"], message, row["id"]))
+    return len(rows)
 
 
 def finish_run(run_id: str, status: str, n_ok: int, n_failed: int,

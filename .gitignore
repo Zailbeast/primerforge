@@ -3,6 +3,7 @@ data/
 
 # Build and cache output
 dist/
+graphify-out/
 __pycache__/
 *.pyc
 

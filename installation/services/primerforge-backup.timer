@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily PrimerForge database backup
+
+[Timer]
+# Overnight, with a random delay so several servers do not all start at once.
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+# A server that was switched off at 03:30 still gets its backup when it starts.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

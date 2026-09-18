@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} - PrimerForge{% endblock %}
+
+{% block content %}
+<section class="card card-pad auth-card">
+  <h1>{{ heading }}</h1>
+  <p class="small dim">{{ message }}</p>
+  <a class="btn btn-primary" href="{{ url_for('page_design') }}">Back to Design</a>
+</section>
+{% endblock %}

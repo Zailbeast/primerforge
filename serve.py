@@ -9,6 +9,7 @@ installer keeps it in /etc/primerforge/primerforge.env.
 """
 from __future__ import annotations
 
+import logging
 import signal
 import sys
 
@@ -20,6 +21,11 @@ from primerforge import auth, config
 
 
 def main() -> int:
+    # systemd captures stdout and stderr into the journal, so a plain stream
+    # handler is all that is needed for 'journalctl -u primerforge' to show
+    # tracebacks from the app with a timestamp against them.
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     webapp._startup()                                       # noqa: SLF001
     application = webapp.app
     if config.TRUST_PROXY:
@@ -34,7 +40,8 @@ def main() -> int:
           f"(logins {'on' if config.AUTH_ENABLED else 'OFF'}, data in {config.DATA_DIR})",
           flush=True)
     serve(application, host=config.HOST, port=config.PORT, threads=config.THREADS,
-          ident="PrimerForge", channel_timeout=300, max_request_body_size=512 * 1024 * 1024)
+          ident="PrimerForge", channel_timeout=300,
+          max_request_body_size=webapp.MAX_BODY_BYTES)
     return 0
 
 

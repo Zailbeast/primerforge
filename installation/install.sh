@@ -117,6 +117,7 @@ else
   die "the application files are missing. On a computer with internet access run 'python installation/prepare.py', then copy the whole installation folder here."
 fi
 
+# shellcheck source=/dev/null
 if [[ -r /etc/os-release ]]; then . /etc/os-release; fi
 ok "${PRETTY_NAME:-Linux} ($(uname -m))"
 
@@ -253,8 +254,8 @@ ok "PrimerForge ${VERSION:-} in $APP_DIR/app"
 ISTAGE="$APP_DIR/installation.new"
 rm -rf "$ISTAGE" && install -d "$ISTAGE/services"
 install -m 0755 "$SRC_DIR/install.sh" "$SRC_DIR/uninstall.sh" "$SRC_DIR/primerforge.sh" "$ISTAGE/"
-install -m 0644 "$SRC_DIR"/services/*.service "$ISTAGE/services/"
-sed -i 's/\r$//' "$ISTAGE"/*.sh "$ISTAGE"/services/*.service   # in case Windows line endings crept in
+install -m 0644 "$SRC_DIR"/services/*.service "$SRC_DIR"/services/*.timer "$ISTAGE/services/"
+sed -i 's/\r$//' "$ISTAGE"/*.sh "$ISTAGE"/services/*   # in case Windows line endings crept in
 swap_in "$ISTAGE" "$APP_DIR/installation"
 
 # A venv made by a different Python (e.g. after an OS upgrade) is rebuilt.
@@ -358,6 +359,7 @@ ok "$ENV_FILE"
 
 # Run a management command as the service account with the service's settings.
 as_service() {
+  # shellcheck source=/dev/null
   (set -a; . "$ENV_FILE"; set +a; cd "$APP_DIR/app" && \
    runuser -u "$SERVICE_USER" -- "$APP_DIR/venv/bin/python" -m primerforge.cli "$@")
 }
@@ -376,10 +378,13 @@ render() {
 }
 render "$APP_DIR/installation/services/primerforge.service" > /etc/systemd/system/primerforge.service
 render "$APP_DIR/installation/services/primerforge-setup.service" > /etc/systemd/system/primerforge-setup.service
+render "$APP_DIR/installation/services/primerforge-backup.service" > /etc/systemd/system/primerforge-backup.service
+render "$APP_DIR/installation/services/primerforge-backup.timer" > /etc/systemd/system/primerforge-backup.timer
 render "$APP_DIR/installation/primerforge.sh" > /usr/local/bin/primerforge
 chmod 0755 /usr/local/bin/primerforge
 systemctl daemon-reload
-ok "primerforge.service, primerforge-setup.service and the 'primerforge' command"
+systemctl enable -q --now primerforge-backup.timer
+ok "primerforge.service, primerforge-setup.service, a nightly database backup and the 'primerforge' command"
 
 # ---------------------------------------------------------------------------
 # Administrator account

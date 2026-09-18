@@ -33,6 +33,19 @@ _progress: dict[str, Progress] = {}
 _lock = threading.Lock()
 
 
+def recover() -> int:
+    """Close runs left behind by a previous process, once at startup.
+
+    Progress lives in this process only, so a run interrupted by a restart or a
+    crash has nobody left to finish it. Call this before serving requests, or
+    those rows stay 'running' for ever and their pages poll a run that will
+    never report again.
+    """
+    return store.abandon_running_runs(
+        "The server restarted while this run was in progress. "
+        "Any variants below finished before that; run the rest again.")
+
+
 def get_progress(run_id: str) -> dict | None:
     with _lock:
         p = _progress.get(run_id)

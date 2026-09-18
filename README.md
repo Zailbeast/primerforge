@@ -121,12 +121,37 @@ sudo primerforge setup-data --species mus_musculus    add a species now
 sudo primerforge users add alice [--admin]            prints a temporary password
 sudo primerforge users passwd alice                   e.g. a forgotten password
 sudo primerforge users list | role | disable | enable | delete
+sudo primerforge backup [--keep N]      back up runs, tickets and accounts now
 sudo primerforge restart
 sudo primerforge uninstall [--purge]    --purge also deletes data, accounts and settings
 ```
 
 The desktop app (`run.bat`, `python app.py`) is unchanged: no logins, and it
 listens on this computer only.
+
+### Backups
+
+`primerforge-backup.timer` runs every night at about 03:30 and keeps the last 14
+copies in `/var/lib/primerforge/backups`. Each one is taken with SQLite's online
+backup, so it is a consistent database even though the server is still serving
+requests — which a plain file copy of a live database is not.
+
+Only the database is backed up: runs, results, BLAST/BLAT tickets, accounts and
+settings, typically a few megabytes. Genomes and BLAST databases are tens of
+gigabytes and are not included, because `sudo primerforge setup-data` downloads
+and rebuilds them exactly as they were.
+
+To restore, stop the service, put the backup in place, and start it again:
+
+```
+sudo systemctl stop primerforge
+sudo -u primerforge cp /var/lib/primerforge/backups/primerforge-YYYYmmdd-HHMMSS.sqlite \
+    /var/lib/primerforge/primerforge.sqlite
+sudo systemctl start primerforge
+```
+
+Copy the backups off the server as well — a nightly copy on the same disk does
+not survive that disk.
 
 ## What it accepts
 
@@ -367,8 +392,10 @@ installation/           everything for a Linux server install:
   prepare.py            copies the app in and downloads the dependencies
   uninstall.sh          removal (also 'sudo primerforge uninstall')
   primerforge.sh        the 'primerforge' management command
-  services/             systemd units: web service, data setup, HTTPS proxy
+  services/             systemd units: web service, data setup, HTTPS proxy,
+                        nightly database backup
   app/, dependencies/   filled by prepare.py
+tests/                  offline unit tests (python -m unittest discover -s tests -t .)
 primerforge/
   config.py             paths, URLs, readiness checks, server settings
   auth.py               accounts, password hashing, sign-in throttling
@@ -408,6 +435,17 @@ data/                   SQLite database, genome, BLAST databases, species (gener
   polymerase, cycling conditions or secondary structure in the template — treat
   it as a strong filter, not a guarantee.
 - Designs are not a substitute for wet-lab validation.
+- The server runs as **one process**, with threads for concurrent users. BLAST
+  job workers, the BLAT gfServers and run progress all live in that process, so
+  it must not be forked into several workers (no `gunicorn -w 4`): each worker
+  would start its own gfServers and only one of them would know about any given
+  run. Raise `PRIMERFORGE_THREADS` to serve more people at once.
+- A design run interrupted by a restart cannot be resumed — the variants it had
+  already finished are stored, so repeating them would duplicate results. At
+  startup such a run is closed and its page says what happened; submit the
+  remaining variants again. Queued and running BLAST jobs *are* resumed.
+- Tests: `python -m unittest discover -s tests -t .`. They are offline and need
+  no genome, no BLAST+ and no network — only `pip install -r requirements.txt`.
 
 ## Data sources
 

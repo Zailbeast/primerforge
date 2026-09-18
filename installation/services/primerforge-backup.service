@@ -1,0 +1,22 @@
+[Unit]
+Description=PrimerForge database backup
+Documentation=file://@APP_DIR@/app/README.md
+
+[Service]
+# A consistent copy of runs, tickets and accounts, taken with SQLite's online
+# backup so it is safe while the server is serving requests. Genomes and BLAST
+# databases are not copied: they are large and can be downloaded again.
+Type=oneshot
+User=@USER@
+Group=@USER@
+EnvironmentFile=@CONF_DIR@/primerforge.env
+WorkingDirectory=@APP_DIR@/app
+ExecStart=@APP_DIR@/venv/bin/python -m primerforge.cli backup --keep 14
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=@PROTECT_HOME@
+ReadWritePaths=@DATA_DIR@

@@ -45,7 +45,7 @@ APP_ITEMS = ["app.py", "serve.py", "requirements.txt", "README.md", "run.bat",
              "primerforge", "templates", "static", "tools"]
 SKIP_DIRS = {"__pycache__", ".git"}
 SKIP_SUFFIXES = {".pyc", ".pyo", ".log"}
-TEXT_SUFFIXES = {".sh", ".service", ".py", ".html", ".js", ".css", ".txt", ".md", ".bat"}
+TEXT_SUFFIXES = {".sh", ".service", ".timer", ".py", ".html", ".js", ".css", ".txt", ".md", ".bat"}
 INSTALLER_FILES = ["install.sh", "uninstall.sh", "primerforge.sh", "services"]
 
 PYTHON_VERSIONS = ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]

@@ -15,18 +15,26 @@ from pathlib import Path
 
 from flask import (Flask, Response, abort, g, jsonify, redirect, render_template,
                    request, send_file, session, url_for)
+from werkzeug.exceptions import HTTPException
 
 from primerforge import (annotation, auth, blastconf, blastjobs, blatserver, config, engines,
                          pipeline, presets, refseq, seqfetch, seqviews, species, store,
                          transcripts, transcriptview, variants, wsl)
 from primerforge.variants import VariantError
 
+# Anything larger than this is refused before the body is read. The largest real
+# submission is a BLAST form of MAX_NUM_SEQUENCES sequences at MAX_SEQUENCE_LENGTH
+# bases each (~6 MB), so 32 MB leaves room for FASTA headers and form overhead
+# while keeping a mistaken or hostile upload from filling memory.
+MAX_BODY_BYTES = 32 * 1024 * 1024
+
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 app.secret_key = auth.secret_key()
 app.config.update(SESSION_COOKIE_NAME="primerforge_session", SESSION_COOKIE_HTTPONLY=True,
                   SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=config.SECURE_COOKIES,
-                  PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=14))
+                  PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=14),
+                  MAX_CONTENT_LENGTH=MAX_BODY_BYTES)
 ROOT = Path(__file__).resolve().parent
 
 
@@ -902,6 +910,10 @@ def _startup() -> None:
     store.init()
     auth.init()
     config.ensure_dirs()
+    stranded = pipeline.recover()      # design runs cut short by the last shutdown
+    if stranded:
+        app.logger.warning("Closed %d design run(s) interrupted by a restart.", stranded)
+    store.prune_cache()                # expired Ensembl responses nothing can use
     species.ensure_human()
     blastjobs.init()
     threading.Thread(target=_autostart_blat, daemon=True).start()
@@ -1101,6 +1113,49 @@ def api_users_action(user_id: int, action: str):
     except auth.AuthError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Errors
+# --------------------------------------------------------------------------
+def _prefers_json() -> bool:
+    return (request.path.startswith("/api/") or request.is_json
+            or request.accept_mimetypes.best == "application/json")
+
+
+def _error(code: int, heading: str, message: str):
+    if _prefers_json():
+        return jsonify({"error": message}), code
+    return render_template("error.html", code=code, heading=heading, message=message), code
+
+
+@app.errorhandler(403)
+def _handle_forbidden(_exc):
+    return _error(403, "Not allowed", "Only an administrator can do that.")
+
+
+@app.errorhandler(404)
+def _handle_not_found(_exc):
+    return _error(404, "Not found", "That page or record does not exist. It may have been "
+                                    "deleted, or the link may be out of date.")
+
+
+@app.errorhandler(413)
+def _handle_too_large(_exc):
+    return _error(413, "Too large", f"That submission is larger than the "
+                                    f"{MAX_BODY_BYTES // (1024 * 1024)} MB limit. Split it into "
+                                    f"smaller batches.")
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected(exc):
+    """Log the traceback for the administrator; show the user something readable."""
+    if isinstance(exc, HTTPException):
+        return exc
+    app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+    return _error(500, "Something went wrong",
+                  "PrimerForge hit an unexpected error. The details were written to the "
+                  "server log; an administrator can see them with 'journalctl -u primerforge'.")
 
 
 def main() -> None:

@@ -25,6 +25,8 @@ Usage: sudo primerforge COMMAND
   users passwd NAME       New temporary password (e.g. a forgotten one)
   users role NAME admin|user
   users disable|enable|delete NAME
+  backup [--keep N]       Back up runs, tickets and accounts now (a nightly
+                          backup already runs; see primerforge-backup.timer)
   version                 Installed version
   uninstall [--purge]     Remove PrimerForge (--purge also deletes data, settings and accounts)
 EOF
@@ -38,14 +40,16 @@ need_root() {
 }
 
 cli() {
+  # shellcheck source=/dev/null
   (set -a; . "$ENV_FILE"; set +a
    cd "$APP_DIR/app"
    exec runuser -u "$SERVICE_USER" -- "$APP_DIR/venv/bin/python" -m primerforge.cli "$@")
 }
 
 unit_state() {
-  local unit="$1"
-  if [[ -f "/etc/systemd/system/$unit.service" ]]; then
+  local unit="$1" file="/etc/systemd/system/$1"
+  [[ "$unit" == *.timer || "$unit" == *.service ]] || file="$file.service"
+  if [[ -f "$file" ]]; then
     printf '  %-22s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
   fi
 }
@@ -59,6 +63,7 @@ case "$command" in
     unit_state primerforge
     unit_state primerforge-proxy
     unit_state primerforge-setup
+    unit_state primerforge-backup.timer
     echo
     cli status
     ;;
@@ -93,6 +98,10 @@ case "$command" in
   users)
     need_root "$command"
     cli users "$@"
+    ;;
+  backup)
+    need_root "$command"
+    cli backup "$@"
     ;;
   version)
     sed -n 's/^__version__ = "\(.*\)"/PrimerForge \1/p' "$APP_DIR/app/primerforge/__init__.py"
